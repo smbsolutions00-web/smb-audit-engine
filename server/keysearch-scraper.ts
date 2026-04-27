@@ -863,16 +863,25 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
         'form input[type="text"]:visible',
         'input[type="text"]:visible',
       ];
+
+      // First, give the React app time to hydrate and render any input at all.
+      // With residential proxy latency this can take 10-20s after navigation.
+      try {
+        await page.locator('input:visible').first().waitFor({ state: "visible", timeout: 30_000 });
+      } catch {
+        // fall through; per-selector loop will produce a clearer error
+      }
+
       let filled = false;
       let lastInputErr: unknown = null;
       for (const sel of inputCandidates) {
         const loc = page.locator(sel).first();
         try {
-          await loc.waitFor({ state: "visible", timeout: 2000 });
-          await loc.click({ timeout: 2000 }).catch(() => {});
+          await loc.waitFor({ state: "visible", timeout: 8_000 });
+          await loc.click({ timeout: 5_000 }).catch(() => {});
           // clear any prefilled text first
-          await loc.fill("", { timeout: 2000 }).catch(() => {});
-          await loc.fill(cleanDomain, { timeout: 5000 });
+          await loc.fill("", { timeout: 5_000 }).catch(() => {});
+          await loc.fill(cleanDomain, { timeout: 10_000 });
           log(`Filled domain via selector: ${sel}`);
           filled = true;
           break;
