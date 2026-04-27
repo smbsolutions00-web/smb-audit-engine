@@ -230,6 +230,31 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
   }
 
   const solver = new Solver(process.env.TWOCAPTCHA_API_KEY as string);
+
+  // Pre-check balance so we surface a clear, actionable error when the
+  // 2Captcha account is empty or the API key is wrong, instead of the
+  // generic "An Unexpected Error has occurred" the library throws.
+  try {
+    const balance = await solver.balance();
+    log(`2Captcha balance: $${balance}`);
+    if (typeof balance === "number" && balance <= 0) {
+      return {
+        result: "unsolvable",
+        detail: `2Captcha balance is $${balance}. Add funds at https://2captcha.com/enterpage`,
+      };
+    }
+  } catch (err: any) {
+    // Surface the raw 2Captcha error code/message — usually one of
+    // ERROR_KEY_DOES_NOT_EXIST, ERROR_WRONG_USER_KEY, ERROR_ZERO_BALANCE,
+    // ERROR_IP_NOT_ALLOWED, ERROR_NO_SUCH_METHOD, etc.
+    const raw = err?.message || err?.error || err?.code || JSON.stringify(err) || String(err);
+    log(`2Captcha balance check failed: ${raw}`);
+    return {
+      result: "unsolvable",
+      detail: `2Captcha API rejected the key (balance check). Raw error: ${raw}`,
+    };
+  }
+
   log("Submitting hCaptcha to 2Captcha…");
   let token: string;
   try {
@@ -240,9 +265,18 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
     token = res.data;
     log(`2Captcha returned token (length=${token.length})`);
   } catch (err: any) {
+    // 2Captcha errors look like { err: 'ERROR_ZERO_BALANCE', ... }, but the
+    // ts wrapper sometimes only sets a generic message. Probe every field.
+    const raw =
+      err?.error ||
+      err?.code ||
+      err?.err ||
+      err?.message ||
+      (typeof err === "object" ? JSON.stringify(err) : String(err));
+    log(`2Captcha solve threw: ${raw}`);
     return {
       result: "unsolvable",
-      detail: `2Captcha solve failed: ${err?.message || String(err)}`,
+      detail: `2Captcha solve failed. Raw error: ${raw}`,
     };
   }
 
