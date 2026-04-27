@@ -1908,9 +1908,47 @@ function FinalDeliverableSection({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptError, setScriptError] = useState<string | null>(null);
+
   const hasUploaded = !!uploadedAt;
   const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
   const downloadUrl = `${API_BASE}/api/audits/${auditId}/manus-pdf`;
+  const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
+
+  async function downloadElevenLabsScript() {
+    setScriptLoading(true);
+    setScriptError(null);
+    try {
+      const res = await fetch(scriptUrl, { credentials: "include" });
+      if (!res.ok) {
+        let msg = `Failed (HTTP ${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.message) msg = j.message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") || "";
+      const m = cd.match(/filename="([^"]+)"/);
+      const filename = m?.[1] || "elevenlabs-dj2-script.txt";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setScriptError(e?.message || "Could not generate script.");
+    } finally {
+      setScriptLoading(false);
+    }
+  }
 
   async function handleSubmit() {
     if (!file) {
@@ -1954,28 +1992,61 @@ function FinalDeliverableSection({
       <div className="mt-5 grid gap-5">
         {hasUploaded && (
           <div
-            className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+            className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent/10 p-4"
             data-testid="manus-pdf-stored"
           >
-            <div className="flex items-center gap-3">
-              <FileDown className="h-5 w-5 shrink-0 text-accent" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Final PDF stored</div>
-                <div className="text-xs text-muted-foreground">
-                  Uploaded {formatDate(uploadedAt!)}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <FileDown className="h-5 w-5 shrink-0 text-accent" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Final PDF stored</div>
+                  <div className="text-xs text-muted-foreground">
+                    Uploaded {formatDate(uploadedAt!)}
+                  </div>
                 </div>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  asChild
+                  variant="outline"
+                  data-testid="button-download-manus-pdf"
+                >
+                  <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                    <FileDown className="mr-1.5 h-4 w-4" />
+                    Download PDF
+                  </a>
+                </Button>
+                <Button
+                  type="button"
+                  onClick={downloadElevenLabsScript}
+                  disabled={scriptLoading}
+                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  data-testid="button-download-elevenlabs-script"
+                >
+                  {scriptLoading ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <FileDown className="mr-1.5 h-4 w-4" />
+                      ElevenLabs Script
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <Button
-              asChild
-              className="bg-accent text-accent-foreground hover:bg-accent/90"
-              data-testid="button-download-manus-pdf"
-            >
-              <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
-                <FileDown className="mr-1.5 h-4 w-4" />
-                Download PDF
-              </a>
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              The ElevenLabs script is the DJ #2 narration written from this PDF —
+              ready to paste into ElevenLabs block by block. Generation takes about
+              20 seconds.
+            </p>
+            {scriptError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+                {scriptError}
+              </div>
+            )}
           </div>
         )}
 

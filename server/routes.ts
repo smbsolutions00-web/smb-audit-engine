@@ -442,6 +442,49 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   );
 
+  /* Generate the ElevenLabs DJ #2 narration script from the Manus PDF.
+     Returns a plain-text .txt download ready to paste into ElevenLabs. */
+  app.get("/api/audits/:id/elevenlabs-script", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const intake = audit.intakeData ? JSON.parse(audit.intakeData) : {};
+      const filePath: string | undefined = intake.manusPdfPath;
+      if (!filePath || !existsSync(filePath)) {
+        return res.status(404).json({
+          message: "Upload the Manus PDF first \u2014 the script is generated from it.",
+        });
+      }
+
+      const { generateElevenLabsScript } = await import("./elevenlabs-narration");
+      const script = await generateElevenLabsScript({
+        pdfPath: filePath,
+        context: {
+          ownerName: intake.contactName || intake.clientName || audit.clientName,
+          businessName: audit.clientName || intake.clientName,
+          industry: audit.industry ?? undefined,
+          location: audit.location ?? undefined,
+          overallGrade: audit.overallGrade ?? null,
+          overallScore: audit.overallScore ?? null,
+        },
+      });
+
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${slug}-elevenlabs-dj2-script.txt"`,
+      );
+      res.send(script);
+    } catch (err: any) {
+      console.error("elevenlabs-script error:", err);
+      res.status(500).json({ message: err?.message || "Script generation failed" });
+    }
+  });
+
   /* Download the previously uploaded Manus PDF for an audit */
   app.get("/api/audits/:id/manus-pdf", async (req, res) => {
     try {
