@@ -41,8 +41,10 @@ FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runtime
 # /opt/node20 and put it FIRST on PATH so it shadows the Node 24 that
 # ships with the Playwright base image. Verifying the version at the
 # end of the RUN forces a build failure if anything goes wrong.
+# poppler-utils ships pdftoppm, which we use to render Manus PDFs into PNGs
+# for Claude vision when the PDF is image-only (no selectable text).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl xz-utils \
+  && apt-get install -y --no-install-recommends curl xz-utils poppler-utils \
   && curl -fsSL https://nodejs.org/dist/v20.20.1/node-v20.20.1-linux-x64.tar.xz -o /tmp/node20.tar.xz \
   && mkdir -p /opt/node20 \
   && tar -xJf /tmp/node20.tar.xz -C /opt/node20 --strip-components=1 \

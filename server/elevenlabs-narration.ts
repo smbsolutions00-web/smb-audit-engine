@@ -1,31 +1,40 @@
 /**
  * ElevenLabs DJ #2 narration script generator.
  *
- * Workflow:
- *   1. Read the Manus simplified PDF that was uploaded for an audit.
- *   2. Extract its text and split into slide-shaped chunks.
- *   3. Ask Claude to fill the DJ #2 faith-based template with slide-by-slide
- *      narration (block-by-block, voice direction in [brackets], SSML <break/>
- *      tags) so the output can be pasted directly into ElevenLabs.
+ * Strategy:
+ *   1. Try text extraction with pdf-parse (fast, free).
+ *   2. If the PDF is image-only (or text is too short), render every page
+ *      to PNG with poppler's pdftoppm and send the page images to Claude's
+ *      vision API so it can read the slides directly.
+ *   3. Fill the DJ #2 faith-based template with slide-by-slide narration
+ *      (block-by-block, voice-direction tags, SSML <break/>) and return
+ *      the script as plain text ready to paste into ElevenLabs.
  *
  * The template lives at templates/elevenlabs-dj2-narration-template.txt.
- * Per the user's spec: each block must stay under 5,000 characters,
- * placeholders [OWNER NAME/S] and [BUSINESS NAME] get filled from the audit,
- * and the prayer + DJ intro + closing prayer must be preserved verbatim
- * from the template.
+ * The opening prayer + DJ intro and the closing prayer + warm closing
+ * are reproduced verbatim with only [OWNER NAME/S] and [BUSINESS NAME]
+ * substituted.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { readFileSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parsePdfBuffer } from "./audit-engine";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 /* Resolve template path. We try a few locations because in the bundled
-   production build (esbuild → dist/index.cjs) __dirname points at /opt/render
-   while the templates ship at the repo root. */
+   production build (esbuild -> dist/index.cjs) __dirname points at /app/dist
+   while the templates ship at /app/templates. */
 function resolveTemplatePath(): string | null {
   const candidates = [
     process.env.ELEVENLABS_TEMPLATE_PATH,
@@ -35,9 +44,8 @@ function resolveTemplatePath(): string | null {
     "/opt/render/project/src/templates/elevenlabs-dj2-narration-template.txt",
   ].filter(Boolean) as string[];
 
-  // Also try resolving relative to this module file (CJS or ESM)
   try {
-    // @ts-ignore — __dirname exists in CJS bundle
+    // @ts-ignore - __dirname exists in CJS bundle
     if (typeof __dirname !== "undefined") {
       candidates.push(join(__dirname, "..", "templates", "elevenlabs-dj2-narration-template.txt"));
       candidates.push(join(__dirname, "templates", "elevenlabs-dj2-narration-template.txt"));
@@ -46,7 +54,7 @@ function resolveTemplatePath(): string | null {
     /* ignore */
   }
   try {
-    // @ts-ignore — import.meta exists in ESM
+    // @ts-ignore - import.meta exists in ESM
     const here = dirname(fileURLToPath(import.meta.url));
     candidates.push(join(here, "..", "templates", "elevenlabs-dj2-narration-template.txt"));
   } catch {
@@ -69,8 +77,6 @@ function loadTemplate(): string {
   return readFileSync(path, "utf8");
 }
 
-/* Trim and normalize PDF text so we don't blow the prompt budget on blank
-   lines / headers / footers. */
 function cleanPdfText(raw: string): string {
   return raw
     .replace(/\u0000/g, "")
@@ -103,9 +109,48 @@ export interface GenerateNarrationArgs {
   context: NarrationContext;
 }
 
+/* Render every page of a PDF to a PNG using poppler's pdftoppm.
+   Returns base64-encoded PNG strings, one per page. Caps at MAX_PAGES so
+   a long PDF can't blow the vision token budget. */
+const MAX_PAGES = 20;
+const RENDER_DPI = 110; // ~1100x1700 for letter, plenty for slide reading
+
+function renderPdfToPngBase64(pdfPath: string): string[] {
+  const dir = mkdtempSync(join(tmpdir(), "manus-render-"));
+  try {
+    execFileSync(
+      "pdftoppm",
+      [
+        pdfPath,
+        join(dir, "page"),
+        "-png",
+        "-r",
+        String(RENDER_DPI),
+        "-l",
+        String(MAX_PAGES),
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    const files = readdirSync(dir)
+      .filter((f) => f.startsWith("page-") && f.endsWith(".png"))
+      .sort((a, b) => {
+        const na = parseInt(a.match(/page-(\d+)\.png/)?.[1] || "0", 10);
+        const nb = parseInt(b.match(/page-(\d+)\.png/)?.[1] || "0", 10);
+        return na - nb;
+      });
+    return files.map((f) => readFileSync(join(dir, f)).toString("base64"));
+  } finally {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /**
- * Generate the full ElevenLabs DJ #2 narration script for an uploaded
- * Manus PDF. Returns the plain-text script ready to paste into ElevenLabs.
+ * Generate the ElevenLabs DJ #2 narration script for an uploaded Manus PDF.
+ * Returns the plain-text script ready to paste into ElevenLabs.
  */
 export async function generateElevenLabsScript(
   args: GenerateNarrationArgs,
@@ -116,33 +161,46 @@ export async function generateElevenLabsScript(
   }
   const buf = readFileSync(pdfPath);
   const pdfText = cleanPdfText(await parsePdfBuffer(buf));
-  if (!pdfText || pdfText.length < 50) {
-    throw new Error(
-      "Could not extract text from the Manus PDF. The file may be image-only — re-export it as a text PDF and try again.",
-    );
+  const hasUsableText = pdfText.length >= 200;
+
+  // For image-only PDFs (or when text extraction came up short), render
+  // pages to PNG so we can send them to Claude's vision API.
+  let pageImages: string[] = [];
+  if (!hasUsableText) {
+    try {
+      pageImages = renderPdfToPngBase64(pdfPath);
+    } catch (err: any) {
+      throw new Error(
+        `Could not read the Manus PDF. Text extraction returned nothing and PDF rendering failed: ${err?.message || err}`,
+      );
+    }
+    if (pageImages.length === 0) {
+      throw new Error(
+        "Could not extract any pages from the Manus PDF. The file may be corrupted.",
+      );
+    }
   }
 
   const template = loadTemplate();
-
   const owner = context.ownerName?.trim() || context.businessName || "the owner";
   const business = context.businessName?.trim() || "the business";
 
   const system = [
-    "You are writing a finished ElevenLabs narration script. Your output goes straight into ElevenLabs — no preamble, no commentary, no markdown fences.",
+    "You are writing a finished ElevenLabs narration script. Your output goes straight into ElevenLabs - no preamble, no commentary, no markdown fences.",
     "You are voicing 'DJ #2', the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Voice: warm, conversational, confident, plain-English with light faith-based touches.",
     "ABSOLUTE RULES:",
     "1. Follow the supplied DJ #2 template structure exactly. Keep all section headers (### Slide N, ***).",
     "2. The Opening prayer + DJ intro section and the Closing prayer + warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S] and [BUSINESS NAME] substituted.",
     "3. For each slide, replace the bracketed instruction lines with actual narration. Keep voice-direction tags like [warmly, conversational] on their own line above the spoken text.",
     "4. Use SSML <break time=\"0.5s\" /> or <break time=\"1.0s\" /> sparingly to pace key transitions. Never invent other SSML tags.",
-    "5. Each slide section must stay under 5,000 characters of TOTAL text including voice-direction tags. Aim for 600–1,200 characters per slide.",
-    "6. Match the slide count to what is actually in the PDF. If the PDF has fewer than 10 slides, only produce that many slide sections. If more than 10, continue the same pattern (### Slide 11, etc.).",
-    "7. Ground every slide narration in the actual slide content from the Manus PDF text below. Do not invent grades, scores, or numbers that aren't present.",
-    "8. Plain English only — explain anything technical with one short analogy.",
+    "5. Each slide section must stay under 5,000 characters of TOTAL text including voice-direction tags. Aim for 600-1,200 characters per slide.",
+    "6. Produce one ### Slide N section for each slide / page provided. If you receive 12 slides, produce slides 1-12. If you receive 8, produce slides 1-8.",
+    "7. Ground every slide narration in the actual content visible on that slide. Do not invent grades, scores, or numbers that aren't present.",
+    "8. Plain English only - explain anything technical with one short analogy.",
     "9. Output the script as plain text exactly the way it should be pasted into ElevenLabs.",
   ].join("\n");
 
-  const userPrompt = [
+  const headerText = [
     `OWNER NAME: ${owner}`,
     `BUSINESS NAME: ${business}`,
     context.industry ? `INDUSTRY: ${context.industry}` : null,
@@ -153,20 +211,48 @@ export async function generateElevenLabsScript(
     "=== DJ #2 TEMPLATE (follow this structure exactly) ===",
     template,
     "",
-    "=== MANUS SIMPLIFIED PDF TEXT (the actual slide content to narrate) ===",
-    pdfText,
-    "",
-    "Now produce the finished ElevenLabs script. Output ONLY the script text — no preface, no explanation, no markdown code fence.",
   ]
     .filter(Boolean)
     .join("\n");
+
+  const userContent: any[] = [{ type: "text", text: headerText }];
+
+  if (hasUsableText) {
+    userContent.push({
+      type: "text",
+      text:
+        "=== MANUS SIMPLIFIED PDF TEXT (the actual slide content to narrate) ===\n" +
+        pdfText,
+    });
+  } else {
+    userContent.push({
+      type: "text",
+      text: `=== MANUS SIMPLIFIED PDF SLIDES (${pageImages.length} pages, attached as images below - each image is one slide in order) ===`,
+    });
+    for (let i = 0; i < pageImages.length; i++) {
+      userContent.push({ type: "text", text: `--- Slide ${i + 1} ---` });
+      userContent.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: pageImages[i],
+        },
+      });
+    }
+  }
+
+  userContent.push({
+    type: "text",
+    text: "Now produce the finished ElevenLabs script. Output ONLY the script text - no preface, no explanation, no markdown code fence.",
+  });
 
   const client = getClient();
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 8000,
     system,
-    messages: [{ role: "user", content: userPrompt }],
+    messages: [{ role: "user", content: userContent }],
   });
 
   const out = resp.content
@@ -178,7 +264,6 @@ export async function generateElevenLabsScript(
     throw new Error("Claude returned an empty narration script.");
   }
 
-  // Strip any accidental markdown fences
   return out
     .replace(/^```(?:text|markdown)?\s*\n?/i, "")
     .replace(/\n?```\s*$/i, "")
