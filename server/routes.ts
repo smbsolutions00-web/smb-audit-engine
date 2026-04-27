@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import multer from "multer";
 import { registerAuthRoutes, requireAuth } from "./auth";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync, createReadStream } from "node:fs";
 import { join } from "node:path";
 import { storage } from "./storage";
 import {
@@ -431,9 +431,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         res.json({
           status: "received",
-          message:
-            "Manus PDF received. Final deliverable generation will be completed via the assistant.",
+          message: "Manus PDF saved. You can download it any time from this page.",
           format,
+          uploadedAt: intake.manusPdfUploadedAt,
         });
       } catch (err: any) {
         console.error("final-deliverable error:", err);
@@ -441,6 +441,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
   );
+
+  /* Download the previously uploaded Manus PDF for an audit */
+  app.get("/api/audits/:id/manus-pdf", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const intake = audit.intakeData ? JSON.parse(audit.intakeData) : {};
+      const filePath: string | undefined = intake.manusPdfPath;
+      if (!filePath || !existsSync(filePath)) {
+        return res.status(404).json({ message: "No Manus PDF uploaded for this audit yet." });
+      }
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      const stat = statSync(filePath);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Length", stat.size.toString());
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${slug}-final-deliverable.pdf"`,
+      );
+      createReadStream(filePath).pipe(res);
+    } catch (err: any) {
+      console.error("manus-pdf download error:", err);
+      res.status(500).json({ message: err?.message || "Download failed" });
+    }
+  });
 
   /* Create new audit — multipart upload, kicks off async processing */
   app.post(

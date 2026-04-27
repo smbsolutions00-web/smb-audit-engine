@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Collapsible,
   CollapsibleContent,
@@ -81,6 +80,9 @@ interface IntakeShape {
   industry?: string;
   location?: string;
   address?: string;
+  manusPdfPath?: string;
+  manusPdfUploadedAt?: number;
+  finalDeliverableFormat?: string;
 }
 
 interface AuditDetail {
@@ -364,7 +366,10 @@ export default function Report() {
       <ImmediateActionPlanSection plan={r.immediateActionPlan} />
 
       {/* Final client deliverable hand-off (Manus PDF upload) */}
-      <FinalDeliverableSection auditId={data.id} />
+      <FinalDeliverableSection
+        auditId={data.id}
+        uploadedAt={data.intakeData?.manusPdfUploadedAt ?? null}
+      />
 
     </div>
   );
@@ -1891,28 +1896,33 @@ function KeysearchPullButton({ auditId }: { auditId: string }) {
 }
 
 /* -------------------- Final Manus Deliverable -------------------- */
-function FinalDeliverableSection({ auditId }: { auditId: string }) {
+function FinalDeliverableSection({
+  auditId,
+  uploadedAt,
+}: {
+  auditId: string;
+  uploadedAt: number | null;
+}) {
   const [file, setFile] = useState<File | null>(null);
-  const [format, setFormat] = useState<"merged-pdf" | "pptx">("merged-pdf");
   const [submitting, setSubmitting] = useState(false);
-  const [resultMsg, setResultMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const hasUploaded = !!uploadedAt;
+  const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+  const downloadUrl = `${API_BASE}/api/audits/${auditId}/manus-pdf`;
+
   async function handleSubmit() {
     if (!file) {
-      setErrorMsg("Please upload the Manus PDF first.");
+      setErrorMsg("Please choose a PDF first.");
       return;
     }
     setSubmitting(true);
     setErrorMsg(null);
-    setResultMsg(null);
     try {
       const fd = new FormData();
       fd.append("manusPdf", file);
-      fd.append("format", format);
-      const API = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
-      const res = await fetch(`${API}/api/audits/${auditId}/final-deliverable`, {
+      const res = await fetch(`${API_BASE}/api/audits/${auditId}/final-deliverable`, {
         method: "POST",
         body: fd,
       });
@@ -1920,7 +1930,8 @@ function FinalDeliverableSection({ auditId }: { auditId: string }) {
       if (!res.ok) {
         throw new Error(json?.message || "Upload failed");
       }
-      setResultMsg(json.message || "Manus PDF received.");
+      setFile(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
     } catch (e: any) {
       setErrorMsg(e?.message || "Something went wrong.");
     } finally {
@@ -1934,15 +1945,42 @@ function FinalDeliverableSection({ auditId }: { auditId: string }) {
       data-testid="section-final-deliverable"
     >
       <SectionLabel icon={Upload}>Final Client Deliverable</SectionLabel>
-      <h3 className="mt-2 text-lg font-bold tracking-tight">Hand-off to Manus</h3>
+      <h3 className="mt-2 text-lg font-bold tracking-tight">Manus PDF</h3>
       <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-        Upload the simplified PDF that Manus produced from this audit. The assistant will
-        merge or convert it into your final client-ready deliverable.
+        Upload the simplified PDF that Manus produced from this audit. We just store it
+        here so you can grab the download link any time.
       </p>
 
       <div className="mt-5 grid gap-5">
+        {hasUploaded && (
+          <div
+            className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+            data-testid="manus-pdf-stored"
+          >
+            <div className="flex items-center gap-3">
+              <FileDown className="h-5 w-5 shrink-0 text-accent" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Final PDF stored</div>
+                <div className="text-xs text-muted-foreground">
+                  Uploaded {formatDate(uploadedAt!)}
+                </div>
+              </div>
+            </div>
+            <Button
+              asChild
+              className="bg-accent text-accent-foreground hover:bg-accent/90"
+              data-testid="button-download-manus-pdf"
+            >
+              <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                <FileDown className="mr-1.5 h-4 w-4" />
+                Download PDF
+              </a>
+            </Button>
+          </div>
+        )}
+
         <div className="grid gap-2">
-          <Label>Upload Manus simplified PDF</Label>
+          <Label>{hasUploaded ? "Replace PDF" : "Upload Manus simplified PDF"}</Label>
           {file ? (
             <div
               className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
@@ -1974,7 +2012,9 @@ function FinalDeliverableSection({ auditId }: { auditId: string }) {
               data-testid="manus-pdf-dropzone"
             >
               <Upload className="h-5 w-5 text-muted-foreground" />
-              <span className="text-sm font-medium">Click to upload PDF</span>
+              <span className="text-sm font-medium">
+                {hasUploaded ? "Click to upload a new PDF" : "Click to upload PDF"}
+              </span>
               <span className="text-xs text-muted-foreground">Up to 50 MB</span>
             </button>
           )}
@@ -1987,54 +2027,34 @@ function FinalDeliverableSection({ auditId }: { auditId: string }) {
           />
         </div>
 
-        <div className="grid gap-2">
-          <Label>Output format</Label>
-          <RadioGroup
-            value={format}
-            onValueChange={(v: string) => setFormat(v as "merged-pdf" | "pptx")}
-            className="flex flex-col gap-2 sm:flex-row sm:gap-6"
-            data-testid="manus-format-radio"
-          >
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <RadioGroupItem value="merged-pdf" id="format-merged-pdf" data-testid="radio-merged-pdf" />
-              <span>Merged client-ready PDF</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <RadioGroupItem value="pptx" id="format-pptx" data-testid="radio-pptx" />
-              <span>Presentation deck (PPTX)</span>
-            </label>
-          </RadioGroup>
-        </div>
-
-        {resultMsg && (
-          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-sm text-accent">
-            {resultMsg}
-          </div>
-        )}
         {errorMsg && (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             {errorMsg}
           </div>
         )}
 
-        <div className="flex justify-end">
-          <Button
-            type="button"
-            onClick={handleSubmit}
-            disabled={submitting || !file}
-            className="bg-accent text-accent-foreground hover:bg-accent/90"
-            data-testid="button-generate-final-deliverable"
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              "Generate Final Deliverable"
-            )}
-          </Button>
-        </div>
+        {file && (
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="bg-accent text-accent-foreground hover:bg-accent/90"
+              data-testid="button-save-manus-pdf"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : hasUploaded ? (
+                "Replace stored PDF"
+              ) : (
+                "Save PDF"
+              )}
+            </Button>
+          </div>
+        )}
       </div>
     </Card>
   );
