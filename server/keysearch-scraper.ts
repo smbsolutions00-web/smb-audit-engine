@@ -195,37 +195,55 @@ function isCaptchaSolverEnabled(): boolean {
  *   - "unsolvable" : captcha present but no solver configured / solver failed
  */
 type CaptchaResult = "solved" | "not-needed" | "unsolvable";
+type CaptchaKind = "hcaptcha" | "recaptcha";
 async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResult; detail?: string }> {
-  // Look for an hCaptcha widget. Keysearch loads hCaptcha as an iframe
-  // pointing at hcaptcha.com, with a parent div holding data-sitekey.
-  const sitekey = await page.evaluate(() => {
-    // Strategy 1: data-sitekey attribute on .h-captcha element
-    const widget = document.querySelector("[data-sitekey]");
-    if (widget) {
-      const k = widget.getAttribute("data-sitekey");
-      if (k) return k;
+  // Detect either reCAPTCHA v2 or hCaptcha. They look visually similar
+  // (image grid challenges) but have different sitekey formats and 2Captcha
+  // task types: reCAPTCHA sitekeys start with "6L", hCaptcha sitekeys are UUIDs.
+  const detected = await page.evaluate(() => {
+    type Hit = { kind: "hcaptcha" | "recaptcha"; sitekey: string };
+
+    // Strategy 1: explicit class hints
+    const hCap = document.querySelector(".h-captcha[data-sitekey]") as HTMLElement | null;
+    if (hCap?.dataset.sitekey) return { kind: "hcaptcha", sitekey: hCap.dataset.sitekey } as Hit;
+    const gCap = document.querySelector(".g-recaptcha[data-sitekey]") as HTMLElement | null;
+    if (gCap?.dataset.sitekey) return { kind: "recaptcha", sitekey: gCap.dataset.sitekey } as Hit;
+
+    // Strategy 2: any [data-sitekey], classify by the sitekey shape
+    const widget = document.querySelector("[data-sitekey]") as HTMLElement | null;
+    if (widget?.getAttribute("data-sitekey")) {
+      const k = widget.getAttribute("data-sitekey")!;
+      // reCAPTCHA sitekeys always start with "6L". hCaptcha sitekeys are UUIDs.
+      const kind = k.startsWith("6L") ? "recaptcha" : "hcaptcha";
+      return { kind, sitekey: k } as Hit;
     }
-    // Strategy 2: parse sitekey from hCaptcha iframe URL
+
+    // Strategy 3: parse sitekey from challenge iframe URL
     const iframes = Array.from(document.querySelectorAll("iframe"));
     for (const f of iframes) {
       const src = f.getAttribute("src") || "";
       if (src.includes("hcaptcha.com")) {
         const m = src.match(/[?&]sitekey=([^&]+)/);
-        if (m) return decodeURIComponent(m[1]);
+        if (m) return { kind: "hcaptcha", sitekey: decodeURIComponent(m[1]) } as Hit;
+      }
+      if (src.includes("google.com/recaptcha") || src.includes("recaptcha.net")) {
+        const m = src.match(/[?&]k=([^&]+)/);
+        if (m) return { kind: "recaptcha", sitekey: decodeURIComponent(m[1]) } as Hit;
       }
     }
     return null;
-  });
+  }) as { kind: CaptchaKind; sitekey: string } | null;
 
-  if (!sitekey) {
+  if (!detected) {
     return { result: "not-needed" };
   }
 
-  log(`hCaptcha detected (sitekey=${sitekey.slice(0, 8)}…)`);
+  const { kind, sitekey } = detected;
+  log(`${kind} detected (sitekey=${sitekey.slice(0, 12)}…)`);
   if (!isCaptchaSolverEnabled()) {
     return {
       result: "unsolvable",
-      detail: "hCaptcha challenge present but TWOCAPTCHA_API_KEY is not set on the server.",
+      detail: `${kind} challenge present but TWOCAPTCHA_API_KEY is not set on the server.`,
     };
   }
 
@@ -244,9 +262,6 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
       };
     }
   } catch (err: any) {
-    // Surface the raw 2Captcha error code/message — usually one of
-    // ERROR_KEY_DOES_NOT_EXIST, ERROR_WRONG_USER_KEY, ERROR_ZERO_BALANCE,
-    // ERROR_IP_NOT_ALLOWED, ERROR_NO_SUCH_METHOD, etc.
     const raw = err?.message || err?.error || err?.code || JSON.stringify(err) || String(err);
     log(`2Captcha balance check failed: ${raw}`);
     return {
@@ -255,33 +270,32 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
     };
   }
 
-  log("Submitting hCaptcha to 2Captcha…");
+  log(`Submitting ${kind} to 2Captcha…`);
   let token: string;
   try {
-    const res = await solver.hcaptcha({
-      pageurl: page.url(),
-      sitekey,
-    });
+    const res =
+      kind === "recaptcha"
+        ? await solver.recaptcha({ pageurl: page.url(), googlekey: sitekey })
+        : await solver.hcaptcha({ pageurl: page.url(), sitekey });
     token = res.data;
-    log(`2Captcha returned token (length=${token.length})`);
+    log(`2Captcha returned ${kind} token (length=${token.length})`);
   } catch (err: any) {
-    // 2Captcha errors look like { err: 'ERROR_ZERO_BALANCE', ... }, but the
-    // ts wrapper sometimes only sets a generic message. Probe every field.
     const raw =
       err?.error ||
       err?.code ||
       err?.err ||
       err?.message ||
       (typeof err === "object" ? JSON.stringify(err) : String(err));
-    log(`2Captcha solve threw: ${raw}`);
+    log(`2Captcha ${kind} solve threw: ${raw}`);
     return {
       result: "unsolvable",
-      detail: `2Captcha solve failed. Raw error: ${raw}`,
+      detail: `2Captcha ${kind} solve failed. Raw error: ${raw}`,
     };
   }
 
-  // Inject the token into BOTH the standard hCaptcha response textarea
-  // and any [name="g-recaptcha-response"] (some pages mirror it).
+  // Inject the token. reCAPTCHA puts it in g-recaptcha-response,
+  // hCaptcha in h-captcha-response. We set both to be safe — some
+  // sites mirror them.
   await page.evaluate((tok) => {
     const setOrCreate = (name: string) => {
       let ta = document.querySelector(`textarea[name="${name}"]`) as HTMLTextAreaElement | null;
@@ -298,10 +312,7 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
     setOrCreate("g-recaptcha-response");
   }, token);
 
-  // Some hCaptcha integrations need the iframe's window to receive the
-  // token via the JS callback. The textarea injection works for most
-  // server-side validation flows, which is what Keysearch uses.
-  log("Injected hCaptcha token into form");
+  log(`Injected ${kind} token into form`);
   return { result: "solved" };
 }
 
@@ -697,7 +708,7 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
       if (!loginResult.ok) {
         const screenshotPath = await captureDebugScreenshot(page, "login");
         const baseMsg = loginResult.captchaDetail
-          ? `Keysearch login is gated by hCaptcha and we couldn't solve it. ${loginResult.captchaDetail}`
+          ? `Keysearch login is gated by a captcha and we couldn't solve it. ${loginResult.captchaDetail}`
           : "Keysearch login failed. Check KEYSEARCH_EMAIL/KEYSEARCH_PASSWORD or look for a captcha/2FA prompt in the screenshot.";
         throw new KeysearchScrapeError(
           "login",
