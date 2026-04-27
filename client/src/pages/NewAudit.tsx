@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { ToastAction } from "@/components/ui/toast";
 import {
   UploadCloud,
   FileText,
@@ -19,7 +18,7 @@ import {
 
 const API = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-type KeysearchSummary = {
+type SeoSummary = {
   domainStrength: number | null;
   backlinks: number | null;
   referringDomains: number | null;
@@ -28,10 +27,10 @@ type KeysearchSummary = {
   topCompetitorCount: number;
 };
 
-type KeysearchAutofetch = {
+type SeoAutofetch = {
   domain: string;
   rows: any[];
-  summary: KeysearchSummary;
+  summary: SeoSummary;
 };
 
 export default function NewAudit() {
@@ -44,16 +43,18 @@ export default function NewAudit() {
   const [clientName, setClientName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Keysearch auto-fetch state
+  // SEO auto-fetch state (DataForSEO)
   const [autofetchAvailable, setAutofetchAvailable] = useState(false);
   const [autofetching, setAutofetching] = useState(false);
-  const [autofetched, setAutofetched] = useState<KeysearchAutofetch | null>(null);
+  const [autofetched, setAutofetched] = useState<SeoAutofetch | null>(null);
 
   // Probe the server for whether the auto-fetch feature is configured.
+  // Backend now reports `dataForSEO`; keep `keysearchAutofetch` as a fallback
+  // for any older Render deploy that hasn't picked up the new field.
   useEffect(() => {
     fetch(`${API}/api/health`)
       .then((r) => r.json())
-      .then((d) => setAutofetchAvailable(!!d?.keysearchAutofetch))
+      .then((d) => setAutofetchAvailable(!!(d?.dataForSEO ?? d?.keysearchAutofetch)))
       .catch(() => setAutofetchAvailable(false));
   }, []);
 
@@ -78,45 +79,26 @@ export default function NewAudit() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // Structured error from /api/keysearch/lookup — surface step + detail
-        // and link to the debug screenshot if one was captured.
+        // Structured error from /api/keysearch/lookup (now backed by DataForSEO).
         const stepLabel: Record<string, string> = {
           config: "Configuration",
-          launch: "Browser launch",
-          navigate: "Reach Keysearch",
-          login: "Login",
-          "explorer-search": "Submit search",
-          "results-timeout": "Wait for results",
-          extraction: "Read results",
+          validate: "Validate domain",
+          overview: "Domain overview",
+          keywords: "Keyword data",
+          backlinks: "Backlink data",
+          competitors: "Competitor data",
+          fetch: "Fetch SEO data",
         };
         const step = data.step ? stepLabel[data.step] || data.step : null;
-        const title = step
-          ? `Keysearch failed at: ${step}`
-          : "Could not pull from Keysearch";
+        const title = step ? `SEO fetch failed at: ${step}` : "Could not fetch SEO data";
         const parts: string[] = [];
         if (data.message) parts.push(data.message);
         if (data.detail) parts.push(`Detail: ${String(data.detail).slice(0, 240)}`);
-        if (data.pageUrl) parts.push(`Page: ${data.pageUrl}`);
         const description = parts.join(" \u2014 ") || `Lookup failed (${res.status})`;
-        const screenshotName: string | undefined = data.screenshotPath;
         toast({
           variant: "destructive",
           title,
           description,
-          action: screenshotName ? (
-            <ToastAction
-              altText="View screenshot"
-              onClick={() => {
-                window.open(
-                  `${API}/api/keysearch/debug-screenshot/${encodeURIComponent(screenshotName)}`,
-                  "_blank",
-                  "noopener,noreferrer",
-                );
-              }}
-            >
-              View screenshot
-            </ToastAction>
-          ) : undefined,
         });
         return;
       }
@@ -133,13 +115,13 @@ export default function NewAudit() {
         },
       });
       toast({
-        title: "Keysearch data captured",
+        title: "SEO data captured",
         description: `${data.rows?.length || 0} keywords pulled for ${data.domain}.`,
       });
     } catch (e: any) {
       toast({
         variant: "destructive",
-        title: "Could not pull from Keysearch",
+        title: "Could not fetch SEO data",
         description: e?.message || String(e),
       });
     } finally {
@@ -182,7 +164,7 @@ export default function NewAudit() {
           Upload client documents
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Provide the Client Intake Form, SMB Solution Audit, and the client website. Keysearch CSVs are optional but make the SEO section deeper.
+          Provide the Client Intake Form, SMB Solution Audit, and the client website. SEO data is fetched automatically; CSV uploads are optional and add depth.
         </p>
       </header>
 
@@ -233,12 +215,12 @@ export default function NewAudit() {
           description="Exported SMB Solution Audit covering listings, reviews, social, SEO, website."
         />
 
-        {/* Keysearch — auto-fetch button (server-side scrape) + CSV upload fallback */}
+        {/* SEO data — auto-fetch (DataForSEO) + CSV upload fallback */}
         <div className="space-y-3">
           <div className="flex items-baseline justify-between">
-            <Label>Keysearch data (optional)</Label>
+            <Label>SEO data</Label>
             <span className="text-xs text-muted-foreground">
-              Auto-fetch from your Keysearch account, or upload CSV exports.
+              Auto-fetched from DataForSEO. CSV uploads optional.
             </span>
           </div>
 
@@ -247,11 +229,11 @@ export default function NewAudit() {
               {autofetched ? (
                 <div
                   className="flex flex-col gap-2"
-                  data-testid="keysearch-autofetch-result"
+                  data-testid="seo-autofetch-result"
                 >
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <CheckCircle2 className="h-4 w-4 text-accent" />
-                    Pulled from Keysearch — {autofetched.domain}
+                    SEO data captured — {autofetched.domain}
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
                     <Stat
@@ -273,7 +255,7 @@ export default function NewAudit() {
                       variant="ghost"
                       size="sm"
                       onClick={() => setAutofetched(null)}
-                      data-testid="button-keysearch-reset"
+                      data-testid="button-seo-reset"
                     >
                       <X className="mr-1 h-3 w-3" />
                       Clear
@@ -283,7 +265,7 @@ export default function NewAudit() {
                       size="sm"
                       onClick={handleAutofetch}
                       disabled={autofetching}
-                      data-testid="button-keysearch-refresh"
+                      data-testid="button-seo-refresh"
                     >
                       {autofetching ? (
                         <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -297,24 +279,24 @@ export default function NewAudit() {
               ) : (
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-sm">
-                    <div className="font-medium">Auto-fetch from Keysearch</div>
+                    <div className="font-medium">Fetch SEO data</div>
                     <div className="text-xs text-muted-foreground">
-                      Reads Domain Strength, backlinks, referring domains, and the
-                      organic keyword table for the URL above.
+                      Reads Domain Strength, backlinks, referring domains, top
+                      competitors, and the organic keyword table for the URL above.
                     </div>
                   </div>
                   <Button
                     type="button"
                     onClick={handleAutofetch}
                     disabled={autofetching || !website.trim()}
-                    data-testid="button-keysearch-autofetch"
+                    data-testid="button-seo-autofetch"
                   >
                     {autofetching ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
                       <Sparkles className="mr-2 h-4 w-4" />
                     )}
-                    {autofetching ? "Pulling…" : "Auto-fetch from Keysearch"}
+                    {autofetching ? "Pulling…" : "Auto-fetch SEO data"}
                   </Button>
                 </div>
               )}
@@ -322,7 +304,7 @@ export default function NewAudit() {
           )}
 
           <MultiFileDrop
-            label="Or upload Keysearch CSV exports"
+            label="Or upload SEO data CSV exports (optional)"
             files={keysearch}
             onChange={setKeysearch}
             accept=".csv,text/csv"
@@ -503,7 +485,7 @@ function MultiFileDrop({
           data-testid={testId}
         >
           <Plus className="h-4 w-4" />
-          {files.length === 0 ? "Add Keysearch CSV" : "Add another CSV"}
+          {files.length === 0 ? "Add SEO data CSV" : "Add another CSV"}
         </button>
       </div>
       <input
