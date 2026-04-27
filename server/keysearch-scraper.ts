@@ -378,10 +378,60 @@ async function extractExplorerData(page: Page, domain: string): Promise<Keysearc
   return result;
 }
 
+/** Stages the scraper goes through, surfaced on errors so the UI can
+   tell login failures from rate-limits from selector breakage. */
+export type KeysearchScrapeStep =
+  | "config"
+  | "launch"
+  | "navigate"
+  | "login"
+  | "explorer-search"
+  | "results-timeout"
+  | "extraction";
+
+export class KeysearchScrapeError extends Error {
+  step: KeysearchScrapeStep;
+  pageUrl?: string;
+  screenshotPath?: string;
+  detail?: string;
+  constructor(step: KeysearchScrapeStep, message: string, opts: { pageUrl?: string; screenshotPath?: string; detail?: string } = {}) {
+    super(message);
+    this.name = "KeysearchScrapeError";
+    this.step = step;
+    this.pageUrl = opts.pageUrl;
+    this.screenshotPath = opts.screenshotPath;
+    this.detail = opts.detail;
+  }
+}
+
+/** Where to dump screenshots on failure for debugging. */
+function debugScreenshotPath(label: string): string {
+  const dataDir = process.env.DATA_DIR || process.cwd();
+  mkdirSync(dataDir, { recursive: true });
+  const safe = label.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+  return join(dataDir, `keysearch-debug-${safe}-${Date.now()}.png`);
+}
+
+async function captureDebugScreenshot(page: Page | null, label: string): Promise<string | undefined> {
+  if (!page) return undefined;
+  try {
+    const path = debugScreenshotPath(label);
+    await page.screenshot({ path, fullPage: true });
+    log(`Debug screenshot: ${path}`);
+    return path;
+  } catch (err) {
+    log("Debug screenshot failed:", err instanceof Error ? err.message : err);
+    return undefined;
+  }
+}
+
 /**
- * Public entry point. Returns null on any failure (missing creds,
- * launch failure, login failure, lookup failure). Caller decides
- * whether to fall back to Claude inference or surface an error.
+ * Public entry point. Throws KeysearchScrapeError on failure with a
+ * machine-readable `step` so the API/UI can show a useful message and
+ * we can dump a debug screenshot of whatever Keysearch returned.
+ *
+ * Returns null only when the feature is intentionally disabled or creds
+ * are missing (so the caller can route to a different message).
  */
 export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchExplorerResult | null> {
   if (process.env.KEYSEARCH_AUTOFETCH_ENABLED !== "true") {
@@ -403,17 +453,25 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
     .trim()
     .toLowerCase();
   if (!cleanDomain || !cleanDomain.includes(".")) {
-    log("Invalid domain:", domain);
-    return null;
+    throw new KeysearchScrapeError("config", `Invalid domain: ${domain}`);
   }
 
   let browser: Browser | null = null;
+  let page: Page | null = null;
   try {
     log(`Launching Chromium for ${cleanDomain}`);
-    browser = await chromium.launch({
-      headless: true,
-      args: CHROMIUM_LAUNCH_ARGS,
-    });
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        args: CHROMIUM_LAUNCH_ARGS,
+      });
+    } catch (err: any) {
+      throw new KeysearchScrapeError(
+        "launch",
+        "Could not start Chromium on the server.",
+        { detail: err?.message || String(err) },
+      );
+    }
     const context = await browser.newContext({
       viewport: { width: 1366, height: 900 },
       userAgent:
@@ -421,20 +479,33 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
     });
 
     await loadStoredCookies(context);
-    const page = await context.newPage();
+    page = await context.newPage();
 
     // Try going straight to Explorer. If we get bounced to login, do a fresh login.
-    await page.goto(KEYSEARCH_EXPLORER_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: NAV_TIMEOUT_MS,
-    });
-    await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+    try {
+      await page.goto(KEYSEARCH_EXPLORER_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: NAV_TIMEOUT_MS,
+      });
+      await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+    } catch (err: any) {
+      const screenshotPath = await captureDebugScreenshot(page, "navigate");
+      throw new KeysearchScrapeError(
+        "navigate",
+        "Could not reach keysearch.co Explorer page.",
+        { detail: err?.message || String(err), pageUrl: page.url(), screenshotPath },
+      );
+    }
 
     if (!(await isSignedIn(page))) {
       const ok = await performLogin(page, email, password);
       if (!ok) {
-        log("Could not sign in, aborting");
-        return null;
+        const screenshotPath = await captureDebugScreenshot(page, "login");
+        throw new KeysearchScrapeError(
+          "login",
+          "Keysearch login failed. Check KEYSEARCH_EMAIL/KEYSEARCH_PASSWORD or look for a captcha/2FA prompt in the screenshot.",
+          { pageUrl: page.url(), screenshotPath },
+        );
       }
       await saveCookies(context);
       // Now navigate to Explorer
@@ -449,32 +520,67 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
 
     // Fill the domain input on Explorer and submit
     log(`Running Explorer lookup on ${cleanDomain}`);
-    const domainInput = page.locator('input[type="text"], input:not([type="hidden"])').first();
-    await domainInput.fill(cleanDomain, { timeout: 10_000 });
-    // The Explorer page uses a "Search" button
-    await page.click('button:has-text("Search")', { timeout: 10_000 });
+    try {
+      const domainInput = page.locator('input[type="text"], input:not([type="hidden"])').first();
+      await domainInput.fill(cleanDomain, { timeout: 10_000 });
+      await page.click('button:has-text("Search")', { timeout: 10_000 });
+    } catch (err: any) {
+      const screenshotPath = await captureDebugScreenshot(page, "explorer-search");
+      throw new KeysearchScrapeError(
+        "explorer-search",
+        "Found Keysearch Explorer but couldn't submit the search. The page layout may have changed.",
+        { detail: err?.message || String(err), pageUrl: page.url(), screenshotPath },
+      );
+    }
 
     // Wait for results to render — the Domain Strength card is a reliable anchor
-    await page.waitForFunction(
-      () => {
-        const text = document.body.textContent || "";
-        return /Domain Strength/i.test(text) && /Backlinks/i.test(text);
-      },
-      undefined,
-      { timeout: RESULT_TIMEOUT_MS }
-    );
+    try {
+      await page.waitForFunction(
+        () => {
+          const text = document.body.textContent || "";
+          return /Domain Strength/i.test(text) && /Backlinks/i.test(text);
+        },
+        undefined,
+        { timeout: RESULT_TIMEOUT_MS }
+      );
+    } catch (err: any) {
+      const screenshotPath = await captureDebugScreenshot(page, "results-timeout");
+      // Pull the visible body text so we can spot rate-limit / out-of-credits messages
+      let bodySnippet: string | undefined;
+      try {
+        bodySnippet = (await page.locator("body").innerText({ timeout: 2000 })).slice(0, 600);
+      } catch {
+        /* ignore */
+      }
+      throw new KeysearchScrapeError(
+        "results-timeout",
+        "Keysearch did not return Explorer results in time. You may be out of daily credits, rate-limited, or hit a captcha.",
+        {
+          detail: bodySnippet || err?.message || String(err),
+          pageUrl: page.url(),
+          screenshotPath,
+        },
+      );
+    }
     // Give charts a moment to settle
     await page.waitForTimeout(2000);
 
-    const data = await extractExplorerData(page, cleanDomain);
+    let data: KeysearchExplorerResult;
+    try {
+      data = await extractExplorerData(page, cleanDomain);
+    } catch (err: any) {
+      const screenshotPath = await captureDebugScreenshot(page, "extraction");
+      throw new KeysearchScrapeError(
+        "extraction",
+        "Got Keysearch results but couldn't read them. The page layout may have changed.",
+        { detail: err?.message || String(err), pageUrl: page.url(), screenshotPath },
+      );
+    }
     log(`Extracted: DS=${data.domainStrength}, backlinks=${data.backlinks.total}, refDomains=${data.referringDomains.total}, orgKeywords=${data.organicKeywords.count}, topKeywords=${data.organicKeywords.topKeywords.length}`);
 
     // Best-effort cookie refresh
     await saveCookies(context);
     return data;
-  } catch (err) {
-    log("Scraper failed:", err instanceof Error ? err.message : err);
-    return null;
   } finally {
     if (browser) {
       await browser.close().catch(() => {});

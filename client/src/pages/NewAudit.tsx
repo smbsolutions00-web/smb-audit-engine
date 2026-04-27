@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import {
   UploadCloud,
   FileText,
@@ -77,7 +78,47 @@ export default function NewAudit() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.message || `Lookup failed (${res.status})`);
+        // Structured error from /api/keysearch/lookup — surface step + detail
+        // and link to the debug screenshot if one was captured.
+        const stepLabel: Record<string, string> = {
+          config: "Configuration",
+          launch: "Browser launch",
+          navigate: "Reach Keysearch",
+          login: "Login",
+          "explorer-search": "Submit search",
+          "results-timeout": "Wait for results",
+          extraction: "Read results",
+        };
+        const step = data.step ? stepLabel[data.step] || data.step : null;
+        const title = step
+          ? `Keysearch failed at: ${step}`
+          : "Could not pull from Keysearch";
+        const parts: string[] = [];
+        if (data.message) parts.push(data.message);
+        if (data.detail) parts.push(`Detail: ${String(data.detail).slice(0, 240)}`);
+        if (data.pageUrl) parts.push(`Page: ${data.pageUrl}`);
+        const description = parts.join(" \u2014 ") || `Lookup failed (${res.status})`;
+        const screenshotName: string | undefined = data.screenshotPath;
+        toast({
+          variant: "destructive",
+          title,
+          description,
+          action: screenshotName ? (
+            <ToastAction
+              altText="View screenshot"
+              onClick={() => {
+                window.open(
+                  `${API}/api/keysearch/debug-screenshot/${encodeURIComponent(screenshotName)}`,
+                  "_blank",
+                  "noopener,noreferrer",
+                );
+              }}
+            >
+              View screenshot
+            </ToastAction>
+          ) : undefined,
+        });
+        return;
       }
       setAutofetched({
         domain: data.domain,
@@ -99,7 +140,7 @@ export default function NewAudit() {
       toast({
         variant: "destructive",
         title: "Could not pull from Keysearch",
-        description: e.message,
+        description: e?.message || String(e),
       });
     } finally {
       setAutofetching(false);

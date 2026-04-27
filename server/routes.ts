@@ -20,7 +20,10 @@ import {
   fetchKeysearchExplorer,
   explorerToKeywordRows,
   isKeysearchAutofetchEnabled,
+  KeysearchScrapeError,
 } from "./keysearch-scraper";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
 const INTAKE_AUDIT_MIMES = new Set([
@@ -274,11 +277,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       domain = domain.replace(/^www\./i, "").split("/")[0];
 
-      const data = await fetchKeysearchExplorer(domain);
+      let data;
+      try {
+        data = await fetchKeysearchExplorer(domain);
+      } catch (err: any) {
+        if (err instanceof KeysearchScrapeError) {
+          console.error(
+            `keysearch lookup failed at step=${err.step}: ${err.message}` +
+              (err.detail ? ` detail=${err.detail.slice(0, 200)}` : "") +
+              (err.pageUrl ? ` pageUrl=${err.pageUrl}` : ""),
+          );
+          return res.status(502).json({
+            step: err.step,
+            message: err.message,
+            detail: err.detail,
+            pageUrl: err.pageUrl,
+            screenshotPath: err.screenshotPath
+              ? basename(err.screenshotPath)
+              : undefined,
+          });
+        }
+        throw err;
+      }
       if (!data) {
-        return res.status(502).json({
+        return res.status(503).json({
+          step: "config",
           message:
-            "Could not pull data from Keysearch. Check credentials, your daily credit allowance, or fall back to a CSV upload.",
+            "Keysearch auto-fetch is disabled or missing credentials on the server.",
         });
       }
       const rows = explorerToKeywordRows(data);
@@ -290,7 +315,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           backlinks: data.backlinks?.total ?? null,
           referringDomains: data.referringDomains?.total ?? null,
           organicKeywords: data.organicKeywords?.count ?? null,
-          estTraffic: data.organicKeywords?.estTraffic ?? null,
+          estTraffic: (data.organicKeywords as any)?.estTraffic ?? null,
           topCompetitorCount: data.topCompetitors?.length ?? 0,
         },
         explorer: data, // full payload kept so the frontend can echo a preview
@@ -299,6 +324,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.error("keysearch lookup error:", err);
       res.status(500).json({ message: err?.message || "Keysearch lookup failed" });
     }
+  });
+
+  /* Stream the most recent Keysearch debug screenshot (or one by filename).
+     Used by NewAudit's auto-fetch error toast to show what Keysearch actually
+     showed when the scraper got stuck. Auth-protected by the /api middleware. */
+  app.get("/api/keysearch/debug-screenshot/:filename?", (req, res) => {
+    const dataDir = process.env.DATA_DIR || process.cwd();
+    let target: string | null = null;
+    const requested = req.params.filename;
+    if (requested) {
+      const safe = basename(requested);
+      if (!/^keysearch-debug-[a-z0-9-]+-\d+\.png$/i.test(safe)) {
+        return res.status(400).json({ message: "Invalid filename" });
+      }
+      const candidate = join(dataDir, safe);
+      if (existsSync(candidate)) target = candidate;
+    } else {
+      try {
+        const files = readdirSync(dataDir)
+          .filter((f) => /^keysearch-debug-.+\.png$/i.test(f))
+          .map((f) => ({ f, t: statSync(join(dataDir, f)).mtimeMs }))
+          .sort((a, b) => b.t - a.t);
+        if (files.length > 0) target = join(dataDir, files[0].f);
+      } catch (err) {
+        console.error("debug-screenshot listing error:", err);
+      }
+    }
+    if (!target) {
+      return res.status(404).json({ message: "No debug screenshot available" });
+    }
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store");
+    createReadStream(target).pipe(res);
   });
 
   /* Step 2: assistant POSTs extracted Keysearch metrics here. Merged into the
