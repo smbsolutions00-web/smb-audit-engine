@@ -7,7 +7,9 @@ import Papa from "papaparse";
 // pdf-parse has no proper ESM types; use dynamic import
 import type { ReportData, KeywordRow, ListingRow, Grade } from "@shared/schema";
 
-const MODEL = "claude_sonnet_4_6";
+// Anthropic API expects hyphenated IDs. The underscore form is a sandbox-only alias.
+// claude-sonnet-4-6 is the latest Sonnet (Feb 2026). Override with ANTHROPIC_MODEL env var.
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 /* -------------------- PDF + CSV parsing -------------------- */
 
