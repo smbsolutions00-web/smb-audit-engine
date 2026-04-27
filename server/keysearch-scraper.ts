@@ -12,7 +12,7 @@
  */
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { chromium } from "playwright-core";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 const KEYSEARCH_LOGIN_URL = "https://www.keysearch.co/user";
@@ -124,21 +124,60 @@ async function saveCookies(context: BrowserContext) {
   }
 }
 
-/** Detect whether the page state implies a signed-in user. */
-async function isSignedIn(page: Page): Promise<boolean> {
-  // Heuristic: signed-in pages don't show the "Sign In" submit button.
-  // The Explorer page itself redirects to /user when unauthenticated.
+/** Detect whether we landed on a signed-in Explorer view.
+   This is stricter than "no login form on the page": if Keysearch bounces
+   an unauthenticated session to the marketing homepage, that page also has
+   no login form, but it's clearly not a signed-in state.
+
+   Returns true only when:
+     1) URL contains /explorer (we got the Explorer page, not redirected away), AND
+     2) No login input is visible, AND
+     3) Page does not look like the marketing homepage (no "Start your free trial"
+        / "affordable SEO tool" markers). */
+async function isSignedInOnExplorer(page: Page): Promise<boolean> {
   const url = page.url();
-  if (url.includes("/user/login") || url === "https://www.keysearch.co/user") {
+  // Bounced to login
+  if (url.includes("/user/login") || url.replace(/\/$/, "") === "https://www.keysearch.co/user") {
     return false;
   }
-  // Belt + suspenders: look for any node hinting at the login form
+  // Bounced to marketing homepage
+  if (/^https:\/\/(www\.)?keysearch\.co\/?$/.test(url)) {
+    return false;
+  }
+  // Must be on /explorer
+  if (!url.includes("/explorer")) {
+    return false;
+  }
+  // Marketing-page text markers (defensive — sometimes redirects keep the URL)
+  const isMarketing = await page
+    .locator(
+      'text="Start your free trial", text="affordable SEO tool", text="Free Trial"',
+    )
+    .first()
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  if (isMarketing) return false;
+
+  // Login form visible
   const hasLoginInput = await page
     .locator('input[placeholder="Email" i], input[placeholder="Password" i]')
     .first()
-    .isVisible({ timeout: 1500 })
+    .isVisible({ timeout: 1000 })
     .catch(() => false);
   return !hasLoginInput;
+}
+
+/** Wipe the cached cookie jar so the next run starts clean. */
+function clearCookieJar() {
+  try {
+    const path = cookieJarPath();
+    if (existsSync(path)) {
+      unlinkSync(path);
+      log("Cleared expired cookie jar");
+    }
+  } catch (err) {
+    log("Failed to clear cookie jar:", err);
+  }
 }
 
 async function performLogin(page: Page, email: string, password: string): Promise<boolean> {
@@ -147,11 +186,17 @@ async function performLogin(page: Page, email: string, password: string): Promis
     waitUntil: "domcontentloaded",
     timeout: NAV_TIMEOUT_MS,
   });
-  // Wait for either the login form OR a signed-in landing
   await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
 
-  if (await isSignedIn(page)) {
-    log("Already signed in (cookies still valid)");
+  // If we already landed somewhere that has no login form, the cookies
+  // were still good — just bail and let the caller navigate to /explorer.
+  const hasLoginForm = await page
+    .locator('input[placeholder="Email" i], input[placeholder="Password" i]')
+    .first()
+    .isVisible({ timeout: 1500 })
+    .catch(() => false);
+  if (!hasLoginForm) {
+    log("No login form visible — assuming session still valid");
     return true;
   }
 
@@ -497,7 +542,15 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
       );
     }
 
-    if (!(await isSignedIn(page))) {
+    // We may already be signed in (cached cookies still valid) and on /explorer.
+    // If not — either bounced to login OR bounced to the marketing homepage
+    // because cookies expired — wipe the jar, log in fresh, and re-navigate.
+    if (!(await isSignedInOnExplorer(page))) {
+      log(`Not signed in on Explorer (current URL: ${page.url()}). Logging in fresh.`);
+      // Cached cookies likely expired — clear them so we don't reuse a bad jar.
+      await context.clearCookies().catch(() => {});
+      clearCookieJar();
+
       const ok = await performLogin(page, email, password);
       if (!ok) {
         const screenshotPath = await captureDebugScreenshot(page, "login");
@@ -514,8 +567,19 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
         timeout: NAV_TIMEOUT_MS,
       });
       await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+
+      // If we STILL didn't land on Explorer, surface a clear error.
+      if (!(await isSignedInOnExplorer(page))) {
+        const screenshotPath = await captureDebugScreenshot(page, "login");
+        throw new KeysearchScrapeError(
+          "login",
+          "Logged in but Keysearch did not show the Explorer page. Your account may not include Explorer, or Keysearch redirected the post-login flow elsewhere.",
+          { pageUrl: page.url(), screenshotPath },
+        );
+      }
+      log("Login successful, on Explorer page");
     } else {
-      log("Reused existing session");
+      log("Reused existing session, already on Explorer");
     }
 
     // Fill the domain input on Explorer and submit. Keysearch tweaks this
