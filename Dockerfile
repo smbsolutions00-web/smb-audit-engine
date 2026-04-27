@@ -37,12 +37,20 @@ RUN npm prune --omit=dev
 # coexist; we just put 20 first on the PATH.
 FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runtime
 
-# Install Node 20 (matches the builder stage so native modules load).
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-  && apt-get install -y --no-install-recommends nodejs \
+# Install Node 20 from the official NodeSource binary tarball into
+# /opt/node20 and put it FIRST on PATH so it shadows the Node 24 that
+# ships with the Playwright base image. Verifying the version at the
+# end of the RUN forces a build failure if anything goes wrong.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl xz-utils \
+  && curl -fsSL https://nodejs.org/dist/v20.20.1/node-v20.20.1-linux-x64.tar.xz -o /tmp/node20.tar.xz \
+  && mkdir -p /opt/node20 \
+  && tar -xJf /tmp/node20.tar.xz -C /opt/node20 --strip-components=1 \
+  && rm /tmp/node20.tar.xz \
   && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* \
-  && node --version
+  && rm -rf /var/lib/apt/lists/*
+ENV PATH="/opt/node20/bin:${PATH}"
+RUN node --version | grep -q "^v20" || (echo "FATAL: node is not v20 ($(node --version))" && exit 1)
 
 WORKDIR /app
 
@@ -70,4 +78,6 @@ ENV NODE_ENV=production
 #      browser process is still sandboxed by the container boundary.
 
 EXPOSE 5000
-CMD ["node", "dist/index.cjs"]
+# Absolute path to Node 20 so the runtime can never accidentally pick
+# up the Node 24 binary that ships in the Playwright base image.
+CMD ["/opt/node20/bin/node", "dist/index.cjs"]
