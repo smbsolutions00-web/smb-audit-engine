@@ -14,6 +14,7 @@ import type { Browser, BrowserContext, Page } from "playwright-core";
 import { chromium } from "playwright-core";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { Solver } from "2captcha-ts";
 
 const KEYSEARCH_LOGIN_URL = "https://www.keysearch.co/user";
 const KEYSEARCH_EXPLORER_URL = "https://www.keysearch.co/explorer";
@@ -180,7 +181,101 @@ function clearCookieJar() {
   }
 }
 
-async function performLogin(page: Page, email: string, password: string): Promise<boolean> {
+/** True when a 2Captcha API key is configured. */
+function isCaptchaSolverEnabled(): boolean {
+  return !!process.env.TWOCAPTCHA_API_KEY;
+}
+
+/**
+ * Detect an hCaptcha challenge on the current page and — if 2Captcha is
+ * configured — solve it via 2Captcha and inject the token into the
+ * h-captcha-response textarea. Returns:
+ *   - "solved"     : a captcha was present AND solved
+ *   - "not-needed" : no captcha detected
+ *   - "unsolvable" : captcha present but no solver configured / solver failed
+ */
+type CaptchaResult = "solved" | "not-needed" | "unsolvable";
+async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResult; detail?: string }> {
+  // Look for an hCaptcha widget. Keysearch loads hCaptcha as an iframe
+  // pointing at hcaptcha.com, with a parent div holding data-sitekey.
+  const sitekey = await page.evaluate(() => {
+    // Strategy 1: data-sitekey attribute on .h-captcha element
+    const widget = document.querySelector("[data-sitekey]");
+    if (widget) {
+      const k = widget.getAttribute("data-sitekey");
+      if (k) return k;
+    }
+    // Strategy 2: parse sitekey from hCaptcha iframe URL
+    const iframes = Array.from(document.querySelectorAll("iframe"));
+    for (const f of iframes) {
+      const src = f.getAttribute("src") || "";
+      if (src.includes("hcaptcha.com")) {
+        const m = src.match(/[?&]sitekey=([^&]+)/);
+        if (m) return decodeURIComponent(m[1]);
+      }
+    }
+    return null;
+  });
+
+  if (!sitekey) {
+    return { result: "not-needed" };
+  }
+
+  log(`hCaptcha detected (sitekey=${sitekey.slice(0, 8)}…)`);
+  if (!isCaptchaSolverEnabled()) {
+    return {
+      result: "unsolvable",
+      detail: "hCaptcha challenge present but TWOCAPTCHA_API_KEY is not set on the server.",
+    };
+  }
+
+  const solver = new Solver(process.env.TWOCAPTCHA_API_KEY as string);
+  log("Submitting hCaptcha to 2Captcha…");
+  let token: string;
+  try {
+    const res = await solver.hcaptcha({
+      pageurl: page.url(),
+      sitekey,
+    });
+    token = res.data;
+    log(`2Captcha returned token (length=${token.length})`);
+  } catch (err: any) {
+    return {
+      result: "unsolvable",
+      detail: `2Captcha solve failed: ${err?.message || String(err)}`,
+    };
+  }
+
+  // Inject the token into BOTH the standard hCaptcha response textarea
+  // and any [name="g-recaptcha-response"] (some pages mirror it).
+  await page.evaluate((tok) => {
+    const setOrCreate = (name: string) => {
+      let ta = document.querySelector(`textarea[name="${name}"]`) as HTMLTextAreaElement | null;
+      if (!ta) {
+        ta = document.createElement("textarea");
+        ta.name = name;
+        ta.style.display = "none";
+        document.body.appendChild(ta);
+      }
+      ta.value = tok;
+      ta.style.display = "block";
+    };
+    setOrCreate("h-captcha-response");
+    setOrCreate("g-recaptcha-response");
+  }, token);
+
+  // Some hCaptcha integrations need the iframe's window to receive the
+  // token via the JS callback. The textarea injection works for most
+  // server-side validation flows, which is what Keysearch uses.
+  log("Injected hCaptcha token into form");
+  return { result: "solved" };
+}
+
+async function performLogin(
+  page: Page,
+  email: string,
+  password: string,
+): Promise<{ ok: boolean; captchaDetail?: string }> {
   log("Performing fresh login");
   await page.goto(KEYSEARCH_LOGIN_URL, {
     waitUntil: "domcontentloaded",
@@ -197,12 +292,25 @@ async function performLogin(page: Page, email: string, password: string): Promis
     .catch(() => false);
   if (!hasLoginForm) {
     log("No login form visible — assuming session still valid");
-    return true;
+    return { ok: true };
   }
 
   try {
     await page.fill('input[placeholder="Email" i]', email, { timeout: 10_000 });
     await page.fill('input[placeholder="Password" i]', password, { timeout: 10_000 });
+
+    // Solve any hCaptcha challenge BEFORE clicking Sign In. Keysearch
+    // started gating logins from datacenter IPs (Render) behind hCaptcha.
+    const captcha = await solveCaptchaIfPresent(page);
+    if (captcha.result === "unsolvable") {
+      log(`Captcha unsolvable: ${captcha.detail}`);
+      return { ok: false, captchaDetail: captcha.detail };
+    }
+    if (captcha.result === "solved") {
+      // Give the page a moment to register the injected token before submit.
+      await page.waitForTimeout(1500);
+    }
+
     await page.click('button:has-text("Sign In")', { timeout: 10_000 });
     // Wait for navigation away from the login page
     await page.waitForURL(
@@ -210,10 +318,10 @@ async function performLogin(page: Page, email: string, password: string): Promis
       { timeout: NAV_TIMEOUT_MS }
     );
     log("Login successful, landed at:", page.url());
-    return true;
+    return { ok: true };
   } catch (err) {
     log("Login failed:", err);
-    return false;
+    return { ok: false };
   }
 }
 
@@ -551,13 +659,16 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
       await context.clearCookies().catch(() => {});
       clearCookieJar();
 
-      const ok = await performLogin(page, email, password);
-      if (!ok) {
+      const loginResult = await performLogin(page, email, password);
+      if (!loginResult.ok) {
         const screenshotPath = await captureDebugScreenshot(page, "login");
+        const baseMsg = loginResult.captchaDetail
+          ? `Keysearch login is gated by hCaptcha and we couldn't solve it. ${loginResult.captchaDetail}`
+          : "Keysearch login failed. Check KEYSEARCH_EMAIL/KEYSEARCH_PASSWORD or look for a captcha/2FA prompt in the screenshot.";
         throw new KeysearchScrapeError(
           "login",
-          "Keysearch login failed. Check KEYSEARCH_EMAIL/KEYSEARCH_PASSWORD or look for a captcha/2FA prompt in the screenshot.",
-          { pageUrl: page.url(), screenshotPath },
+          baseMsg,
+          { pageUrl: page.url(), screenshotPath, detail: loginResult.captchaDetail },
         );
       }
       await saveCookies(context);
@@ -722,6 +833,11 @@ export function isKeysearchAutofetchEnabled(): boolean {
     !!process.env.KEYSEARCH_EMAIL &&
     !!process.env.KEYSEARCH_PASSWORD
   );
+}
+
+/** True when 2Captcha is wired up to solve hCaptcha challenges. */
+export function isKeysearchCaptchaSolverEnabled(): boolean {
+  return !!process.env.TWOCAPTCHA_API_KEY;
 }
 
 /**
