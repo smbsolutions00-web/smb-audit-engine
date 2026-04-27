@@ -16,6 +16,11 @@ import {
 import type { KeywordRow, ReportData, Grade, InsertAudit } from "@shared/schema";
 import type { IntakeData, VendastaData } from "./audit-engine";
 import { isLLMAvailable } from "./audit-engine";
+import {
+  fetchKeysearchExplorer,
+  explorerToKeywordRows,
+  isKeysearchAutofetchEnabled,
+} from "./keysearch-scraper";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
 const INTAKE_AUDIT_MIMES = new Set([
@@ -39,7 +44,11 @@ const upload = multer({
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   /* Health / capabilities (always public, no auth) */
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", llmAvailable: isLLMAvailable() });
+    res.json({
+      status: "ok",
+      llmAvailable: isLLMAvailable(),
+      keysearchAutofetch: isKeysearchAutofetchEnabled(),
+    });
   });
 
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
@@ -234,6 +243,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  /* Direct Keysearch lookup — used by the New Audit form's "Auto-fetch" button.
+     Server logs into Keysearch with stored credentials, scrapes the Explorer page
+     for the given domain, and returns CSV-shaped JSON the client can attach to
+     the audit submission alongside (or instead of) a Keysearch CSV upload.
+
+     Returns 503 if the feature flag is off or credentials are missing.
+     Returns 502 if the scraper fails (login blocked, rate-limited, page changed). */
+  app.post("/api/keysearch/lookup", async (req, res) => {
+    try {
+      if (!isKeysearchAutofetchEnabled()) {
+        return res.status(503).json({
+          message:
+            "Keysearch auto-fetch is not configured on this server. Upload a CSV instead.",
+        });
+      }
+      const rawDomain = (req.body?.domain || "").toString().trim();
+      if (!rawDomain) {
+        return res.status(400).json({ message: "domain is required" });
+      }
+      // Strip protocol + path, keep host only — Keysearch wants bare domains.
+      let domain = rawDomain;
+      try {
+        if (domain.includes("://")) {
+          const u = new URL(domain);
+          domain = u.hostname;
+        }
+      } catch {
+        /* fall through with the raw value */
+      }
+      domain = domain.replace(/^www\./i, "").split("/")[0];
+
+      const data = await fetchKeysearchExplorer(domain);
+      if (!data) {
+        return res.status(502).json({
+          message:
+            "Could not pull data from Keysearch. Check credentials, your daily credit allowance, or fall back to a CSV upload.",
+        });
+      }
+      const rows = explorerToKeywordRows(data);
+      res.json({
+        domain: data.domain,
+        rows,
+        summary: {
+          domainStrength: data.domainStrength,
+          backlinks: data.backlinks?.total ?? null,
+          referringDomains: data.referringDomains?.total ?? null,
+          organicKeywords: data.organicKeywords?.count ?? null,
+          estTraffic: data.organicKeywords?.estTraffic ?? null,
+          topCompetitorCount: data.topCompetitors?.length ?? 0,
+        },
+        explorer: data, // full payload kept so the frontend can echo a preview
+      });
+    } catch (err: any) {
+      console.error("keysearch lookup error:", err);
+      res.status(500).json({ message: err?.message || "Keysearch lookup failed" });
+    }
+  });
+
   /* Step 2: assistant POSTs extracted Keysearch metrics here. Merged into the
      SEO pillar so the report reflects domain authority, backlinks, and keywords. */
   app.post("/api/audits/:id/keysearch-data", async (req, res) => {
@@ -392,6 +459,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const website = (req.body.website || "").trim();
         const clientName = (req.body.clientName || "").trim() || "Unnamed Client";
 
+        // Auto-fetched Keysearch rows arrive as a JSON string in the multipart body
+        // when the user clicked "Auto-fetch from Keysearch" instead of (or alongside)
+        // a CSV upload. Same shape as parseKeysearchCsv output.
+        let prefetchedRows: KeywordRow[] = [];
+        const prefetchedJson = (req.body.keysearchRows || "").toString();
+        if (prefetchedJson) {
+          try {
+            const parsed = JSON.parse(prefetchedJson);
+            if (Array.isArray(parsed)) {
+              prefetchedRows = parsed.filter(
+                (r) => r && typeof r.keyword === "string" && r.keyword.trim()
+              );
+            }
+          } catch (err) {
+            console.warn("Could not parse keysearchRows JSON:", err);
+          }
+        }
+
         if (!intakeFile || !vendastaFile || !website) {
           return res
             .status(400)
@@ -411,6 +496,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           intakeBuf: intakeFile.buffer,
           vendastaBuf: vendastaFile.buffer,
           keysearchTexts: keysearchFiles.map((f) => f.buffer.toString("utf8")),
+          prefetchedKeysearchRows: prefetchedRows,
           clientName,
           website,
         }).catch(async (err) => {
@@ -438,6 +524,7 @@ async function processAudit(
     intakeBuf: Buffer;
     vendastaBuf: Buffer;
     keysearchTexts: string[];
+    prefetchedKeysearchRows?: KeywordRow[];
     clientName: string;
     website: string;
   }
@@ -448,10 +535,19 @@ async function processAudit(
     parsePdfBuffer(args.vendastaBuf),
   ]);
 
-  // Step 2: parse Keysearch CSVs
-  const keysearch: KeywordRow[] = args.keysearchTexts
+  // Step 2: parse Keysearch CSVs + merge with any auto-fetched rows.
+  // Dedup on lowercased keyword; CSV wins on conflict (it has full columns).
+  const csvRows: KeywordRow[] = args.keysearchTexts
     .flatMap((csv) => parseKeysearchCsv(csv))
     .filter((r) => !!r.keyword);
+  const merged = new Map<string, KeywordRow>();
+  for (const r of args.prefetchedKeysearchRows || []) {
+    if (r?.keyword) merged.set(r.keyword.toLowerCase(), r);
+  }
+  for (const r of csvRows) {
+    if (r?.keyword) merged.set(r.keyword.toLowerCase(), r);
+  }
+  const keysearch: KeywordRow[] = Array.from(merged.values());
 
   // Step 3: extract structured data via AI (parallel)
   const [intake, vendasta] = await Promise.all([

@@ -1,13 +1,37 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { UploadCloud, FileText, X, ArrowRight, Loader2, Plus } from "lucide-react";
+import {
+  UploadCloud,
+  FileText,
+  X,
+  ArrowRight,
+  Loader2,
+  Plus,
+  Sparkles,
+  CheckCircle2,
+} from "lucide-react";
 
 const API = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
+type KeysearchSummary = {
+  domainStrength: number | null;
+  backlinks: number | null;
+  referringDomains: number | null;
+  organicKeywords: number | null;
+  estTraffic: number | null;
+  topCompetitorCount: number;
+};
+
+type KeysearchAutofetch = {
+  domain: string;
+  rows: any[];
+  summary: KeysearchSummary;
+};
 
 export default function NewAudit() {
   const [, setLocation] = useLocation();
@@ -19,7 +43,68 @@ export default function NewAudit() {
   const [clientName, setClientName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Keysearch auto-fetch state
+  const [autofetchAvailable, setAutofetchAvailable] = useState(false);
+  const [autofetching, setAutofetching] = useState(false);
+  const [autofetched, setAutofetched] = useState<KeysearchAutofetch | null>(null);
+
+  // Probe the server for whether the auto-fetch feature is configured.
+  useEffect(() => {
+    fetch(`${API}/api/health`)
+      .then((r) => r.json())
+      .then((d) => setAutofetchAvailable(!!d?.keysearchAutofetch))
+      .catch(() => setAutofetchAvailable(false));
+  }, []);
+
   const canSubmit = intake && vendasta && website.trim() && !submitting;
+
+  async function handleAutofetch() {
+    const domain = website.trim();
+    if (!domain) {
+      toast({
+        variant: "destructive",
+        title: "Enter the website URL first",
+        description: "Paste the client domain in the field above and try again.",
+      });
+      return;
+    }
+    setAutofetching(true);
+    try {
+      const res = await fetch(`${API}/api/keysearch/lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || `Lookup failed (${res.status})`);
+      }
+      setAutofetched({
+        domain: data.domain,
+        rows: Array.isArray(data.rows) ? data.rows : [],
+        summary: data.summary || {
+          domainStrength: null,
+          backlinks: null,
+          referringDomains: null,
+          organicKeywords: null,
+          estTraffic: null,
+          topCompetitorCount: 0,
+        },
+      });
+      toast({
+        title: "Keysearch data captured",
+        description: `${data.rows?.length || 0} keywords pulled for ${data.domain}.`,
+      });
+    } catch (e: any) {
+      toast({
+        variant: "destructive",
+        title: "Could not pull from Keysearch",
+        description: e.message,
+      });
+    } finally {
+      setAutofetching(false);
+    }
+  }
 
   async function handleSubmit() {
     if (!canSubmit) return;
@@ -31,6 +116,9 @@ export default function NewAudit() {
       keysearch.forEach((f) => fd.append("keysearch", f));
       fd.append("website", website.trim());
       if (clientName.trim()) fd.append("clientName", clientName.trim());
+      if (autofetched && autofetched.rows.length > 0) {
+        fd.append("keysearchRows", JSON.stringify(autofetched.rows));
+      }
 
       const res = await fetch(`${API}/api/audits`, { method: "POST", body: fd });
       if (!res.ok) {
@@ -104,15 +192,103 @@ export default function NewAudit() {
           description="Exported SMB Solution Audit covering listings, reviews, social, SEO, website."
         />
 
-        {/* Keysearch */}
-        <MultiFileDrop
-          label="Keysearch CSV exports (optional)"
-          files={keysearch}
-          onChange={setKeysearch}
-          accept=".csv,text/csv"
-          testId="dropzone-keysearch"
-          description="Upload one or more Keysearch keyword exports. Powers the deep SEO section."
-        />
+        {/* Keysearch — auto-fetch button (server-side scrape) + CSV upload fallback */}
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between">
+            <Label>Keysearch data (optional)</Label>
+            <span className="text-xs text-muted-foreground">
+              Auto-fetch from your Keysearch account, or upload CSV exports.
+            </span>
+          </div>
+
+          {autofetchAvailable && (
+            <div className="rounded-lg border border-card-border bg-secondary/30 p-3">
+              {autofetched ? (
+                <div
+                  className="flex flex-col gap-2"
+                  data-testid="keysearch-autofetch-result"
+                >
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <CheckCircle2 className="h-4 w-4 text-accent" />
+                    Pulled from Keysearch — {autofetched.domain}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
+                    <Stat
+                      label="Domain strength"
+                      value={autofetched.summary.domainStrength}
+                    />
+                    <Stat label="Backlinks" value={autofetched.summary.backlinks} />
+                    <Stat
+                      label="Referring domains"
+                      value={autofetched.summary.referringDomains}
+                    />
+                    <Stat
+                      label="Organic keywords"
+                      value={autofetched.summary.organicKeywords}
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setAutofetched(null)}
+                      data-testid="button-keysearch-reset"
+                    >
+                      <X className="mr-1 h-3 w-3" />
+                      Clear
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleAutofetch}
+                      disabled={autofetching}
+                      data-testid="button-keysearch-refresh"
+                    >
+                      {autofetching ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1 h-3 w-3" />
+                      )}
+                      Re-fetch
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm">
+                    <div className="font-medium">Auto-fetch from Keysearch</div>
+                    <div className="text-xs text-muted-foreground">
+                      Reads Domain Strength, backlinks, referring domains, and the
+                      organic keyword table for the URL above.
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={handleAutofetch}
+                    disabled={autofetching || !website.trim()}
+                    data-testid="button-keysearch-autofetch"
+                  >
+                    {autofetching ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="mr-2 h-4 w-4" />
+                    )}
+                    {autofetching ? "Pulling…" : "Auto-fetch from Keysearch"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <MultiFileDrop
+            label="Or upload Keysearch CSV exports"
+            files={keysearch}
+            onChange={setKeysearch}
+            accept=".csv,text/csv"
+            testId="dropzone-keysearch"
+            description="Multiple CSVs are merged. Combines with auto-fetched data when both are present."
+          />
+        </div>
 
         <div className="flex justify-end pt-2">
           <Button
@@ -131,6 +307,17 @@ export default function NewAudit() {
           </Button>
         </div>
       </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="flex flex-col">
+      <span className="font-medium text-foreground">
+        {value === null || value === undefined ? "—" : value.toLocaleString()}
+      </span>
+      <span>{label}</span>
     </div>
   );
 }
