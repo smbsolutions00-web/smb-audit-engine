@@ -518,12 +518,72 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
       log("Reused existing session");
     }
 
-    // Fill the domain input on Explorer and submit
+    // Fill the domain input on Explorer and submit. Keysearch tweaks this
+    // page often, so try several locator strategies in order and fall back
+    // to pressing Enter if no Search button matches.
     log(`Running Explorer lookup on ${cleanDomain}`);
     try {
-      const domainInput = page.locator('input[type="text"], input:not([type="hidden"])').first();
-      await domainInput.fill(cleanDomain, { timeout: 10_000 });
-      await page.click('button:has-text("Search")', { timeout: 10_000 });
+      const inputCandidates = [
+        'input[placeholder*="domain" i]',
+        'input[placeholder*="url" i]',
+        'input[placeholder*="website" i]',
+        'input[name*="domain" i]',
+        'input[name*="url" i]',
+        'input[id*="domain" i]',
+        'input[type="search"]',
+        'main input[type="text"]:visible',
+        'form input[type="text"]:visible',
+        'input[type="text"]:visible',
+      ];
+      let filled = false;
+      let lastInputErr: unknown = null;
+      for (const sel of inputCandidates) {
+        const loc = page.locator(sel).first();
+        try {
+          await loc.waitFor({ state: "visible", timeout: 2000 });
+          await loc.click({ timeout: 2000 }).catch(() => {});
+          // clear any prefilled text first
+          await loc.fill("", { timeout: 2000 }).catch(() => {});
+          await loc.fill(cleanDomain, { timeout: 5000 });
+          log(`Filled domain via selector: ${sel}`);
+          filled = true;
+          break;
+        } catch (err) {
+          lastInputErr = err;
+        }
+      }
+      if (!filled) {
+        throw new Error(
+          `Could not find domain input. Last error: ${
+            lastInputErr instanceof Error ? lastInputErr.message : String(lastInputErr)
+          }`,
+        );
+      }
+
+      // Try clicking a Search button; if none, fall back to Enter.
+      const buttonCandidates = [
+        'button:has-text("Check Domain")',
+        'button:has-text("Analyze")',
+        'button:has-text("Search Domain")',
+        'button[type="submit"]:has-text("Search")',
+        'form button[type="submit"]',
+        'button:has-text("Search")',
+      ];
+      let clicked = false;
+      for (const sel of buttonCandidates) {
+        try {
+          await page.click(sel, { timeout: 2000 });
+          log(`Submitted via button: ${sel}`);
+          clicked = true;
+          break;
+        } catch {
+          /* try next */
+        }
+      }
+      if (!clicked) {
+        log("No Search button matched, pressing Enter");
+        await page.keyboard.press("Enter");
+      }
     } catch (err: any) {
       const screenshotPath = await captureDebugScreenshot(page, "explorer-search");
       throw new KeysearchScrapeError(
