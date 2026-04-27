@@ -18,7 +18,10 @@ import { Solver } from "2captcha-ts";
 
 const KEYSEARCH_LOGIN_URL = "https://www.keysearch.co/user";
 const KEYSEARCH_EXPLORER_URL = "https://www.keysearch.co/explorer";
-const NAV_TIMEOUT_MS = 30_000;
+// 90s — residential proxies add ~2-3s per resource and Keysearch is
+// asset-heavy. The browser keeps loading in the background after
+// `commit` so we don't actually wait this long; this is the upper bound.
+const NAV_TIMEOUT_MS = 90_000;
 const RESULT_TIMEOUT_MS = 60_000;
 
 /** Where to cache the logged-in cookies between runs. */
@@ -780,12 +783,17 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
     page = await context.newPage();
 
     // Try going straight to Explorer. If we get bounced to login, do a fresh login.
+    // With a residential proxy, full asset loads can take 30s+, so we wait only
+    // for `commit` (URL set, response started) and let assets stream in the
+    // background — then poll for either the Explorer UI or the login form.
     try {
       await page.goto(KEYSEARCH_EXPLORER_URL, {
-        waitUntil: "domcontentloaded",
+        waitUntil: "commit",
         timeout: NAV_TIMEOUT_MS,
       });
-      await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      // Best-effort wait for the page body to render. Don't block on networkidle
+      // because Keysearch's analytics/marketing scripts keep the network busy.
+      await page.waitForLoadState("domcontentloaded", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
     } catch (err: any) {
       const screenshotPath = await captureDebugScreenshot(page, "navigate");
       throw new KeysearchScrapeError(
@@ -819,10 +827,10 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
       await saveCookies(context);
       // Now navigate to Explorer
       await page.goto(KEYSEARCH_EXPLORER_URL, {
-        waitUntil: "domcontentloaded",
+        waitUntil: "commit",
         timeout: NAV_TIMEOUT_MS,
       });
-      await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      await page.waitForLoadState("domcontentloaded", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
 
       // If we STILL didn't land on Explorer, surface a clear error.
       if (!(await isSignedInOnExplorer(page))) {
