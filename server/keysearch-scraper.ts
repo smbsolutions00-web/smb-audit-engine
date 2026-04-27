@@ -901,6 +901,10 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
         'main input[type="text"]:visible',
         'form input[type="text"]:visible',
         'input[type="text"]:visible',
+        // Fallback: any visible input that isn't checkbox/radio/hidden/submit.
+        // Keysearch's Explorer input has no `type` attribute, so the strict
+        // `type="text"` selectors above miss it.
+        'input:visible:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="submit"]):not([type="button"])',
       ];
 
       // First, give the React app time to hydrate and render any input at all.
@@ -924,6 +928,43 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
           log(`Filled domain via selector: ${sel}`);
           filled = true;
           break;
+        } catch (err) {
+          lastInputErr = err;
+        }
+      }
+
+      // Last-resort fallback: tag the widest visible input with a unique attr
+      // in the page, then use a Playwright locator on that attr. This handles
+      // the case where the input has no recognizable attribute at all — the
+      // search box is typically the widest visible input on Explorer.
+      if (!filled) {
+        log("All selectors failed; falling back to widest-visible-input heuristic");
+        try {
+          const tagged = await page.evaluate(() => {
+            const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+            const visible = inputs.filter((el) => {
+              const r = el.getBoundingClientRect();
+              const t = (el.type || "text").toLowerCase();
+              return (
+                r.width > 100 &&
+                r.height > 10 &&
+                !["checkbox", "radio", "hidden", "submit", "button", "file"].includes(t)
+              );
+            });
+            visible.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+            const target = visible[0];
+            if (!target) return false;
+            target.setAttribute("data-smb-search-input", "1");
+            return true;
+          });
+          if (tagged) {
+            const loc = page.locator('[data-smb-search-input="1"]').first();
+            await loc.click({ timeout: 5_000 }).catch(() => {});
+            await loc.fill("", { timeout: 5_000 }).catch(() => {});
+            await loc.fill(cleanDomain, { timeout: 10_000 });
+            log("Filled domain via widest-visible-input fallback");
+            filled = true;
+          }
         } catch (err) {
           lastInputErr = err;
         }
