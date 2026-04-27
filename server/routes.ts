@@ -21,6 +21,7 @@ import {
   explorerToKeywordRows,
   isKeysearchAutofetchEnabled,
   isKeysearchCaptchaSolverEnabled,
+  isKeysearchProxyEnabled,
   KeysearchScrapeError,
 } from "./keysearch-scraper";
 import { readdirSync } from "node:fs";
@@ -53,6 +54,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       llmAvailable: isLLMAvailable(),
       keysearchAutofetch: isKeysearchAutofetchEnabled(),
       keysearchCaptchaSolver: isKeysearchCaptchaSolverEnabled(),
+      keysearchProxy: isKeysearchProxyEnabled(),
     });
   });
 

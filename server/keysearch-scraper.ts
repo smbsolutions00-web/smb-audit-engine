@@ -187,6 +187,91 @@ function isCaptchaSolverEnabled(): boolean {
 }
 
 /**
+ * Parse PROXY_URL into Playwright's launch-time proxy config and
+ * 2Captcha's `proxy` + `proxytype` parameters. Supports the formats:
+ *   - http://user:pass@host:port
+ *   - https://user:pass@host:port
+ *   - socks5://user:pass@host:port
+ *   - host:port:user:pass         (Smartproxy/Decodo "flat" format)
+ *   - user:pass@host:port         (no scheme — we default to http)
+ *   - host:port                   (no auth — IP allowlisted)
+ *
+ * Returns null when PROXY_URL is unset or unparsable so callers can
+ * fall back to direct (no proxy) mode.
+ */
+type ParsedProxy = {
+  playwright: { server: string; username?: string; password?: string };
+  twoCaptcha: { proxy: string; proxytype: "HTTP" | "HTTPS" | "SOCKS5" };
+  hostPort: string; // for logging without leaking creds
+};
+function parseProxyUrl(): ParsedProxy | null {
+  const raw = (process.env.PROXY_URL || "").trim();
+  if (!raw) return null;
+
+  let scheme: "http" | "https" | "socks5" = "http";
+  let body = raw;
+  const schemeMatch = raw.match(/^(http|https|socks5):\/\/(.*)$/i);
+  if (schemeMatch) {
+    scheme = schemeMatch[1].toLowerCase() as any;
+    body = schemeMatch[2];
+  }
+
+  let username: string | undefined;
+  let password: string | undefined;
+  let hostPort: string;
+
+  if (body.includes("@")) {
+    // user:pass@host:port
+    const at = body.lastIndexOf("@");
+    const cred = body.slice(0, at);
+    hostPort = body.slice(at + 1);
+    const colon = cred.indexOf(":");
+    if (colon === -1) {
+      username = cred;
+    } else {
+      username = cred.slice(0, colon);
+      password = cred.slice(colon + 1);
+    }
+  } else {
+    // Could be host:port  OR  host:port:user:pass
+    const parts = body.split(":");
+    if (parts.length === 4) {
+      hostPort = `${parts[0]}:${parts[1]}`;
+      username = parts[2];
+      password = parts[3];
+    } else {
+      hostPort = body;
+    }
+  }
+
+  // 2Captcha wants "login:password@host:port" (no scheme prefix). If
+  // the proxy has no auth, just "host:port".
+  const twoCaptchaProxy =
+    username !== undefined
+      ? `${username}:${password ?? ""}@${hostPort}`
+      : hostPort;
+
+  return {
+    playwright: {
+      server: `${scheme}://${hostPort}`,
+      username,
+      password,
+    },
+    twoCaptcha: {
+      proxy: twoCaptchaProxy,
+      proxytype:
+        scheme === "socks5" ? "SOCKS5" : scheme === "https" ? "HTTPS" : "HTTP",
+    },
+    hostPort,
+  };
+}
+
+/** True when a residential/datacenter proxy is configured for outbound traffic. */
+function isProxyEnabled(): boolean {
+  return parseProxyUrl() !== null;
+}
+
+/**
  * Detect an hCaptcha challenge on the current page and — if 2Captcha is
  * configured — solve it via 2Captcha and inject the token into the
  * h-captcha-response textarea. Returns:
@@ -270,13 +355,23 @@ async function solveCaptchaIfPresent(page: Page): Promise<{ result: CaptchaResul
     };
   }
 
+  // Pass our proxy to 2Captcha so the worker that solves the captcha
+  // and the browser submitting the token both come from the same IP —
+  // critical for reCAPTCHA v2 trust, since Google ties the token to
+  // the IP that solved it.
+  const proxy = parseProxyUrl();
+  const proxyParams = proxy
+    ? { proxy: proxy.twoCaptcha.proxy, proxytype: proxy.twoCaptcha.proxytype }
+    : {};
+  if (proxy) log(`Routing 2Captcha through proxy ${proxy.hostPort}`);
+
   log(`Submitting ${kind} to 2Captcha…`);
   let token: string;
   try {
     const res =
       kind === "recaptcha"
-        ? await solver.recaptcha({ pageurl: page.url(), googlekey: sitekey })
-        : await solver.hcaptcha({ pageurl: page.url(), sitekey });
+        ? await solver.recaptcha({ pageurl: page.url(), googlekey: sitekey, ...proxyParams })
+        : await solver.hcaptcha({ pageurl: page.url(), sitekey, ...proxyParams });
     token = res.data;
     log(`2Captcha returned ${kind} token (length=${token.length})`);
   } catch (err: any) {
@@ -658,10 +753,15 @@ export async function fetchKeysearchExplorer(domain: string): Promise<KeysearchE
   let page: Page | null = null;
   try {
     log(`Launching Chromium for ${cleanDomain}`);
+    const proxyConfig = parseProxyUrl();
+    if (proxyConfig) {
+      log(`Routing browser traffic through proxy ${proxyConfig.hostPort}`);
+    }
     try {
       browser = await chromium.launch({
         headless: true,
         args: CHROMIUM_LAUNCH_ARGS,
+        proxy: proxyConfig?.playwright,
       });
     } catch (err: any) {
       throw new KeysearchScrapeError(
@@ -881,6 +981,10 @@ export function isKeysearchAutofetchEnabled(): boolean {
 }
 
 /** True when 2Captcha is wired up to solve hCaptcha challenges. */
+export function isKeysearchProxyEnabled(): boolean {
+  return isProxyEnabled();
+}
+
 export function isKeysearchCaptchaSolverEnabled(): boolean {
   return !!process.env.TWOCAPTCHA_API_KEY;
 }
