@@ -1,0 +1,197 @@
+Here’s a **clean ElevenLabs script template** you can save and reuse. No explanations, just the structure and text you need.
+
+You’ll customize:
+- [OWNER NAME/S]
+- [BUSINESS NAME]
+- Slide content
+
+Everything else can stay consistent.
+
+***
+
+## ELEVENLABS NARRATION TEMPLATE – DJ #2
+
+### Opening prayer + DJ intro
+
+[reverent, warm, calm]  
+Father, thank You for [OWNER NAME/S] and for the work of their hands. Thank You for [BUSINESS NAME] and for every opportunity You’ve placed before them. Give us clarity as we walk through this audit, wisdom to understand it, and direction for what comes next. Let this be productive, practical, and fruitful. In Jesus’ name, amen. <break time="1.0s" />
+
+[light, warm, slightly playful]  
+Before we jump in, let me introduce myself.
+
+[conversational, confident]  
+My name is DJ — you can just call me DJ Number Two.
+
+[slight smile]  
+I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions.
+
+[steady, credible]  
+I work right beside him, and I’ve been trained through hundreds of hours of listening, learning, reviewing presentations, and supporting conversations across every level of business — from Fortune 50 CEOs all the way down to hardworking mom-and-pop companies.
+
+[clear, reassuring]  
+So while Dwayne leads the vision, I’m here to help simplify this digital presence overview for you and your company in a way that’s clear, practical, and easy to follow.
+
+[encouraging]  
+My role in this presentation is simple: walk you through what matters, explain what the numbers mean, and help make the next steps feel manageable.
+
+[calm, inviting]  
+So give me just a few minutes to walk you through the full picture.
+
+[reassuring]  
+Write down any questions that come up along the way, so we can make sure those get addressed.
+
+[gentle transition]  
+Alright, let’s walk through your audit together.
+
+***
+
+### Slide 1
+
+[warmly, conversational]  
+As we look at slide number one…
+
+[describe what the slide is titled and what it shows]
+
+[brief, clear explanation of the key elements on the slide]
+
+[one simple analogy or plain-English reframing, if helpful]
+
+***
+
+### Slide 2
+
+[confident, steady]  
+As we continue now looking at slide number two…
+
+[describe the main headline, score, or visual]
+
+[explain the key points in simple language]
+
+[optional: short analogy that makes the concept feel concrete]
+
+***
+
+### Slide 3
+
+[calm, guiding]  
+As we continue now looking at slide number three…
+
+[describe what this slide covers]
+
+[explain the grades, scores, or sections on the slide]
+
+[restate the main takeaway in one clear sentence]
+
+***
+
+### Slide 4
+
+[more serious, focused]  
+As we continue now looking at slide number four…
+
+[name the pillar or topic of this slide]
+
+[call out the grade or score if shown]
+
+[describe what’s missing or what the slide is warning about]
+
+[describe the opportunity or “what to do” that the slide points to]
+
+***
+
+### Slide 5
+
+[firm, analytical]  
+As we continue now looking at slide number five…
+
+[explain the headline or key statement]
+
+[walk through the most important numbers or bullets]
+
+[close with one short line that sums up what this slide means in real life]
+
+***
+
+### Slide 6
+
+[calm, steady]  
+As we continue now looking at slide number six…
+
+[describe the main topic of the slide]
+
+[explain what’s missing, broken, or out of alignment]
+
+[point out the main recommended action this slide is pushing toward]
+
+***
+
+### Slide 7
+
+[empathetic, practical]  
+As we continue now looking at slide number seven…
+
+[name the pillar or focus of this slide]
+
+[describe the “current reality” points]
+
+[describe “the plan” or “what’s next” points]
+
+[one short line connecting reviews/trust/appointments or equivalent for that industry]
+
+***
+
+### Slide 8
+
+[slight energy lift]  
+As we continue now looking at slide number eight…
+
+[describe the current state shown on the slide]
+
+[describe the recommended content mix, cadence, or behavior]
+
+[one simple analogy about visibility, consistency, or being remembered]
+
+***
+
+### Slide 9
+
+[organized, momentum-building]  
+As we continue now looking at slide number nine…
+
+[explain that this is the action plan slide]
+
+[briefly list the critical actions]
+
+[briefly list the high-priority actions]
+
+[mention any quick wins called out on the slide]
+
+[close with one line about how these actions stack together]
+
+***
+
+### Slide 10
+
+[hopeful, confident]  
+As we continue now looking at slide number ten…
+
+[describe how this slide shows the pillars working together]
+
+[mention 2–4 expected outcomes that matter most]
+
+[one clear line about “more leads, more revenue” or the core benefit]
+
+[gentle setup for closing prayer]  
+Before we wrap this up, I’d like to pray over this business.
+
+[reverent, hopeful]  
+Father, thank You for [OWNER NAME/S], for the quality of their work, and for the foundation already in place. Give them wisdom in every next step, favor with every customer, and clarity as they build what comes next. Let the work of their hands prosper, and let this business become easier to find, easier to trust, and easier to choose. In Jesus’ name, amen.
+
+[warm closing]  
+Thank you for walking through this audit with me. When you’re ready, we’re here to help you turn this plan into action.
+
+***
+
+You can now:
+- Keep this template in your own system as your **standard ElevenLabs script skeleton**, and  
+- Each time Manus gives you a new PDF/PowerPoint, bring it to me and I’ll fill in each slide section under these headings in the same style.

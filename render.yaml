@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: smb-audit-engine
+    runtime: node
+    plan: starter # $7/mo, always-on. Use "free" to test (sleeps after 15min idle).
+    region: oregon
+    branch: main
+    autoDeploy: true
+
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/index.cjs
+
+    # Persistent disk for SQLite (data.db) + uploaded Manus PDFs.
+    # Without this, Render redeploys would wipe all audit data.
+    disk:
+      name: smb-audit-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Tells the app where to put data.db and uploads/ — points at the persistent disk.
+      - key: DATA_DIR
+        value: /var/data
+
+      # Auth gate
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: ALLOWED_EMAILS
+        value: smbsolutions00@gmail.com
+      - key: APP_URL
+        value: https://audit.smbsolution.ai
+
+      # Secrets — set in Render dashboard, NOT committed.
+      - key: SESSION_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AUTH_FROM_EMAIL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
