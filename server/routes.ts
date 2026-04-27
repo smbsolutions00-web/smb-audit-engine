@@ -22,7 +22,7 @@ import {
   isKeysearchAutofetchEnabled,
   KeysearchScrapeError,
 } from "./keysearch-scraper";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { basename } from "node:path";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
@@ -328,15 +328,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   /* Stream the most recent Keysearch debug screenshot (or one by filename).
      Used by NewAudit's auto-fetch error toast to show what Keysearch actually
-     showed when the scraper got stuck. Auth-protected by the /api middleware. */
-  app.get("/api/keysearch/debug-screenshot/:filename?", (req, res) => {
+     showed when the scraper got stuck. Auth-protected by the /api middleware.
+     Note: registered as two routes because Express 5 / path-to-regexp v8
+     removed the `?` optional-param shorthand. */
+  function streamDebugScreenshot(filename: string | undefined, res: Response) {
     const dataDir = process.env.DATA_DIR || process.cwd();
     let target: string | null = null;
-    const requested = req.params.filename;
-    if (requested) {
-      const safe = basename(requested);
+    if (filename) {
+      const safe = basename(filename);
       if (!/^keysearch-debug-[a-z0-9-]+-\d+\.png$/i.test(safe)) {
-        return res.status(400).json({ message: "Invalid filename" });
+        res.status(400).json({ message: "Invalid filename" });
+        return;
       }
       const candidate = join(dataDir, safe);
       if (existsSync(candidate)) target = candidate;
@@ -352,11 +354,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     if (!target) {
-      return res.status(404).json({ message: "No debug screenshot available" });
+      res.status(404).json({ message: "No debug screenshot available" });
+      return;
     }
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store");
     createReadStream(target).pipe(res);
+  }
+  app.get("/api/keysearch/debug-screenshot", (_req, res) => {
+    streamDebugScreenshot(undefined, res);
+  });
+  app.get("/api/keysearch/debug-screenshot/:filename", (req, res) => {
+    streamDebugScreenshot(req.params.filename, res);
   });
 
   /* Step 2: assistant POSTs extracted Keysearch metrics here. Merged into the
