@@ -7,7 +7,9 @@ services:
     branch: main
     autoDeploy: true
 
-    buildCommand: npm ci && npm run build
+    # --include=dev because vite/esbuild/tsx/typescript live in devDependencies but are
+    # needed at build time. They're not used at runtime, so the runtime image stays lean.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/index.cjs
 
     # Persistent disk for SQLite (data.db) + uploaded Manus PDFs.
