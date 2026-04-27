@@ -17,13 +17,11 @@ import type { KeywordRow, ReportData, Grade, InsertAudit } from "@shared/schema"
 import type { IntakeData, VendastaData } from "./audit-engine";
 import { isLLMAvailable } from "./audit-engine";
 import {
-  fetchKeysearchExplorer,
+  fetchDataForSEOExplorer,
   explorerToKeywordRows,
-  isKeysearchAutofetchEnabled,
-  isKeysearchCaptchaSolverEnabled,
-  isKeysearchProxyEnabled,
-  KeysearchScrapeError,
-} from "./keysearch-scraper";
+  isDataForSEOEnabled,
+  DataForSEOError,
+} from "./dataforseo-client";
 import { readdirSync } from "node:fs";
 import { basename } from "node:path";
 
@@ -52,9 +50,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({
       status: "ok",
       llmAvailable: isLLMAvailable(),
-      keysearchAutofetch: isKeysearchAutofetchEnabled(),
-      keysearchCaptchaSolver: isKeysearchCaptchaSolverEnabled(),
-      keysearchProxy: isKeysearchProxyEnabled(),
+      seoDataSource: isDataForSEOEnabled() ? "dataforseo" : "none",
+      dataForSEO: isDataForSEOEnabled(),
     });
   });
 
@@ -259,17 +256,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
      Returns 502 if the scraper fails (login blocked, rate-limited, page changed). */
   app.post("/api/keysearch/lookup", async (req, res) => {
     try {
-      if (!isKeysearchAutofetchEnabled()) {
+      if (!isDataForSEOEnabled()) {
         return res.status(503).json({
           message:
-            "Keysearch auto-fetch is not configured on this server. Upload a CSV instead.",
+            "SEO auto-fetch is not configured on this server. Set DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD or upload a CSV instead.",
         });
       }
       const rawDomain = (req.body?.domain || "").toString().trim();
       if (!rawDomain) {
         return res.status(400).json({ message: "domain is required" });
       }
-      // Strip protocol + path, keep host only — Keysearch wants bare domains.
+      // Strip protocol + path, keep host only — DataForSEO wants bare domains.
       let domain = rawDomain;
       try {
         if (domain.includes("://")) {
@@ -283,22 +280,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let data;
       try {
-        data = await fetchKeysearchExplorer(domain);
+        data = await fetchDataForSEOExplorer(domain);
       } catch (err: any) {
-        if (err instanceof KeysearchScrapeError) {
+        if (err instanceof DataForSEOError) {
           console.error(
-            `keysearch lookup failed at step=${err.step}: ${err.message}` +
-              (err.detail ? ` detail=${err.detail.slice(0, 200)}` : "") +
-              (err.pageUrl ? ` pageUrl=${err.pageUrl}` : ""),
+            `dataforseo lookup failed at step=${err.step}: ${err.message}` +
+              (err.detail ? ` detail=${err.detail.slice(0, 200)}` : ""),
           );
           return res.status(502).json({
             step: err.step,
             message: err.message,
             detail: err.detail,
-            pageUrl: err.pageUrl,
-            screenshotPath: err.screenshotPath
-              ? basename(err.screenshotPath)
-              : undefined,
           });
         }
         throw err;
@@ -307,7 +299,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(503).json({
           step: "config",
           message:
-            "Keysearch auto-fetch is disabled or missing credentials on the server.",
+            "SEO auto-fetch is disabled or missing credentials on the server.",
         });
       }
       const rows = explorerToKeywordRows(data);
