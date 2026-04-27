@@ -442,26 +442,65 @@ async function performLogin(
     await page.fill('input[placeholder="Email" i]', email, { timeout: 10_000 });
     await page.fill('input[placeholder="Password" i]', password, { timeout: 10_000 });
 
-    // Solve any hCaptcha challenge BEFORE clicking Sign In. Keysearch
-    // started gating logins from datacenter IPs (Render) behind hCaptcha.
-    const captcha = await solveCaptchaIfPresent(page);
-    if (captcha.result === "unsolvable") {
-      log(`Captcha unsolvable: ${captcha.detail}`);
-      return { ok: false, captchaDetail: captcha.detail };
-    }
-    if (captcha.result === "solved") {
-      // Give the page a moment to register the injected token before submit.
-      await page.waitForTimeout(1500);
+    // Solve captcha + click Sign In. If the page bounces us back with a
+    // fresh challenge (cascading verification — Google distrusts the
+    // proxy IP and serves a follow-up), re-solve up to MAX_ATTEMPTS times.
+    const MAX_ATTEMPTS = 3;
+    let lastCaptchaDetail: string | undefined;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      log(`Login attempt ${attempt}/${MAX_ATTEMPTS}`);
+
+      const captcha = await solveCaptchaIfPresent(page);
+      if (captcha.result === "unsolvable") {
+        log(`Captcha unsolvable: ${captcha.detail}`);
+        return { ok: false, captchaDetail: captcha.detail };
+      }
+      if (captcha.result === "solved") {
+        lastCaptchaDetail = captcha.detail;
+        // Give the page a moment to register the injected token before submit.
+        await page.waitForTimeout(1500);
+      }
+
+      // Click Sign In. The button may be the only one on the page or
+      // it may have a spinner — try a couple of selectors.
+      try {
+        await page.click('button:has-text("Sign In")', { timeout: 8_000 });
+      } catch {
+        await page
+          .click('button[type="submit"]', { timeout: 8_000 })
+          .catch(() => {});
+      }
+
+      // Race: either we navigate away (success) OR we stay on the login
+      // page long enough that we know a cascade is in play.
+      const navigated = await page
+        .waitForURL(
+          (u) => !u.toString().includes("/user/login") && !u.toString().endsWith("/user"),
+          { timeout: 15_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+
+      if (navigated) {
+        log(`Login successful on attempt ${attempt}, landed at: ${page.url()}`);
+        return { ok: true };
+      }
+
+      // Still on login page — let the page finish rendering whatever
+      // it served (could be a fresh captcha widget) before next attempt.
+      log(`Attempt ${attempt} did not navigate; checking for cascade challenge`);
+      await page.waitForTimeout(3_000);
     }
 
-    await page.click('button:has-text("Sign In")', { timeout: 10_000 });
-    // Wait for navigation away from the login page
-    await page.waitForURL(
-      (u) => !u.toString().includes("/user/login") && !u.toString().endsWith("/user"),
-      { timeout: NAV_TIMEOUT_MS }
-    );
-    log("Login successful, landed at:", page.url());
-    return { ok: true };
+    // All attempts exhausted
+    return {
+      ok: false,
+      captchaDetail:
+        lastCaptchaDetail ||
+        `Login bounced back ${MAX_ATTEMPTS} times after captcha solves. ` +
+          `Google likely distrusts the proxy IP. Try rotating the proxy or waiting.`,
+    };
   } catch (err) {
     log("Login failed:", err);
     return { ok: false };
