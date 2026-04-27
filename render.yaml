@@ -1,18 +1,17 @@
 services:
   - type: web
     name: smb-audit-engine
-    runtime: node
+    runtime: docker # Switched from "node" so we can use the Playwright base image
+                    # (Render's standard Node sandbox blocks `sudo apt-get`, which
+                    # `npx playwright install --with-deps` requires).
     plan: starter # $7/mo, always-on. Use "free" to test (sleeps after 15min idle).
     region: oregon
     branch: main
     autoDeploy: true
 
-    # --include=dev because vite/esbuild/tsx/typescript live in devDependencies but are
-    # needed at build time. They're not used at runtime, so the runtime image stays lean.
-    # Chromium is installed at build time so the Keysearch scraper can launch a browser.
-    # --with-deps installs the system libs (libnss3, libxkbcommon, etc.) Chromium needs.
-    buildCommand: npm ci --include=dev && npx playwright install --with-deps chromium && npm run build
-    startCommand: node dist/index.cjs
+    # Build is fully described by ./Dockerfile (FROM mcr.microsoft.com/playwright:
+    # v1.59.1-jammy, npm ci, npm run build). No buildCommand/startCommand needed.
+    dockerfilePath: ./Dockerfile
 
     # Persistent disk for SQLite (data.db) + uploaded Manus PDFs.
     # Without this, Render redeploys would wipe all audit data.

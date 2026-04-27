@@ -1,0 +1,18 @@
+# Don't bloat the Docker build context with stuff the image doesn't need
+node_modules
+dist
+.git
+.env
+.env.local
+*.log
+uploads
+data.db
+data.db-journal
+data.db-shm
+data.db-wal
+keysearch-session.json
+
+# IDE / OS noise
+.DS_Store
+.vscode
+.idea
