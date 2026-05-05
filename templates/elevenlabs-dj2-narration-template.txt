@@ -14,10 +14,10 @@ Everything else can stay consistent.
 ### Opening prayer + DJ intro
 
 [reverent, warm, calm]  
-Father, thank You for [OWNER NAME/S] and for the work of their hands. Thank You for [BUSINESS NAME] and for every opportunity You’ve placed before them. Give us clarity as we walk through this audit, wisdom to understand it, and direction for what comes next. Let this be productive, practical, and fruitful. In Jesus’ name, amen. <break time="1.0s" />
+Hey there, before we get started, if it’s ok with you I would like to pray over your business. <break time="0.5s" /> Father, thank You for [BUSINESS NAME] and for the work of [OWNER NAME/S] and their staff’s hands. Thank You for their wisdom, courage, and obedience to start [BUSINESS NAME], and for every opportunity You’ve placed before them. Give us clarity as we walk through this audit, wisdom to understand it, and direction for what comes next. Let this be productive, practical, and fruitful. In Jesus’ name, amen. <break time="1.0s" />
 
 [light, warm, slightly playful]  
-Before we jump in, let me introduce myself.
+Before we jump in, let me introduce myself, [OWNER NAME/S].
 
 [conversational, confident]  
 My name is DJ — you can just call me DJ Number Two.
