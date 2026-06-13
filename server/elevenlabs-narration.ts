@@ -105,6 +105,29 @@ export interface NarrationContext {
   overallScore?: number | null;
 }
 
+/**
+ * Pull a clean first name out of whatever the intake form gave us.
+ * Handles things like:
+ *   "Tawana Bell"            -> "Tawana"
+ *   "Dr. Sarah Johnson"      -> "Sarah"
+ *   "Michelle Wolff, LCSW"   -> "Michelle"
+ *   "Aina Marie Brooks"      -> "Aina"
+ *   "aina"                   -> "Aina"
+ *   ""                       -> ""
+ * If we can't find anything sensible we return the trimmed original.
+ */
+export function firstNameOf(fullName: string | undefined | null): string {
+  if (!fullName) return "";
+  // Drop trailing credentials after a comma (", MD", ", LCSW", ", PhD")
+  let s = fullName.split(",")[0].trim();
+  // Strip common leading honorifics
+  s = s.replace(/^(dr\.?|mr\.?|mrs\.?|ms\.?|miss|pastor|rev\.?|prof\.?)\s+/i, "").trim();
+  if (!s) return fullName.trim();
+  const first = s.split(/\s+/)[0] || s;
+  // Capitalize first letter, keep the rest as written (handles "DaKota", "McKenna").
+  return first.charAt(0).toUpperCase() + first.slice(1);
+}
+
 export interface GenerateNarrationArgs {
   pdfPath: string;
   context: NarrationContext;
@@ -184,7 +207,9 @@ export async function generateElevenLabsScript(
 
   const template = loadTemplate();
   const owner = context.ownerName?.trim() || context.businessName || "the owner";
+  const ownerFirst = firstNameOf(owner) || owner;
   const business = context.businessName?.trim() || "the business";
+  const teamPhrase = `the ${business} team`;
   const city = context.location?.trim() || "your local";
 
   const system = [
@@ -192,8 +217,8 @@ export async function generateElevenLabsScript(
     "You are voicing 'DJ #2', the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Voice: warm, conversational, confident, plain-English with light faith-based touches.",
     "ABSOLUTE RULES:",
     "1. Follow the supplied DJ #2 template structure exactly. Keep all section headers (### Slide N, ***).",
-    "2. The Intro section and the warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S], [BUSINESS NAME], [CITY], and [SERVING YOUR CUSTOMERS] substituted. [OWNER NAME/S] should be replaced with the owner's first name only when used in the Intro greeting. [SERVING YOUR CUSTOMERS] should be replaced with the industry-appropriate phrase based on INDUSTRY context: for healthcare/medical/dental/medspa/wellness/therapy/counseling use 'caring for your patients'; for law/accounting/consulting/coaching use 'serving your clients'; for restaurant/retail/hospitality/salon/beauty use 'taking care of your guests'; for trades/contractors/home services use 'serving your customers'; if INDUSTRY is unknown or missing, default to 'serving the people you serve'. Do NOT add any prayer (opening or closing). The template intentionally has no prayers.",
-    "3. For each slide, replace the bracketed instruction lines with actual narration. Keep voice-direction tags like [warmly, conversational] on their own line above the spoken text.",
+    "2. The Intro section and the warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S], [BUSINESS NAME], [CITY], and [SERVING YOUR CUSTOMERS] substituted. [OWNER NAME/S] should be replaced with the value of OWNER FIRST NAME (provided in the context block) wherever it appears in the Intro. [BUSINESS NAME] should be replaced with the value of BUSINESS NAME. [SERVING YOUR CUSTOMERS] should be replaced with the industry-appropriate phrase based on INDUSTRY context: for healthcare/medical/dental/medspa/wellness/therapy/counseling use 'caring for your patients'; for law/accounting/consulting/coaching use 'serving your clients'; for restaurant/retail/hospitality/salon/beauty use 'taking care of your guests'; for trades/contractors/home services use 'serving your customers'; if INDUSTRY is unknown or missing, default to 'serving the people you serve'. Do NOT add any prayer (opening or closing). The template intentionally has no prayers.",
+    "3. For each slide, replace the bracketed instruction lines with actual narration. Keep voice-direction tags like [warmly, conversational] on their own line above the spoken text. Make the slide narration feel like a personal one-on-one conversation, not a generic voiceover. Reference the owner and business naturally so the listener knows the script was written for them specifically. Across the full script (not in every single sentence) you should weave in:\n   - OWNER FIRST NAME, used as a direct address (for example: 'Tawana, here's what stands out...').\n   - BUSINESS NAME, used when referring to the business itself ('what we're seeing for Belle Wellness is...').\n   - TEAM PHRASE ('the {BUSINESS NAME} team'), used when talking about the staff/people/employees ('this gives the Belle Wellness team back hours every week').\n   Aim for roughly one direct address per slide and one or two business/team references per slide. Vary the placement (opening, middle, closing). Do NOT cram all three into every sentence, and do NOT robotically repeat 'Tawana, the Belle Wellness team, you all' as a stock phrase. Keep it natural and conversational.",
     "4. Use SSML <break time=\"0.5s\" /> or <break time=\"1.0s\" /> sparingly to pace key transitions. Never invent other SSML tags.",
     "5. Each slide section must stay under 5,000 characters of TOTAL text including voice-direction tags. Aim for 600-1,200 characters per slide.",
     "6. Produce one ### Slide N section for each slide / page provided. If you receive 12 slides, produce slides 1-12. If you receive 8, produce slides 1-8.",
@@ -203,8 +228,10 @@ export async function generateElevenLabsScript(
   ].join("\n");
 
   const headerText = [
-    `OWNER NAME: ${owner}  (use this to substitute [OWNER NAME/S]; in the Intro greeting use the owner's first name only)`,
-    `BUSINESS NAME: ${business}  (use this to substitute [BUSINESS NAME])`,
+    `OWNER FULL NAME: ${owner}`,
+    `OWNER FIRST NAME: ${ownerFirst}  (use this EVERY TIME you need [OWNER NAME/S]; this is what you call them when addressing them directly)`,
+    `BUSINESS NAME: ${business}  (use this EVERY TIME you need [BUSINESS NAME]; also use it when referring to the business in slide narration)`,
+    `TEAM PHRASE: ${teamPhrase}  (use this exact phrase when referring to the staff / employees / people of the business in slide narration)`,
     `CITY: ${city}  (use this to substitute [CITY])`,
     context.industry ? `INDUSTRY: ${context.industry}` : null,
     context.overallGrade ? `OVERALL GRADE: ${context.overallGrade}` : null,
