@@ -271,3 +271,98 @@ export async function generateElevenLabsScript(
     .replace(/\n?```\s*$/i, "")
     .trim();
 }
+
+/**
+ * Split a finished narration script into ElevenLabs-friendly copy/paste blocks.
+ *
+ * Rules:
+ *   - Each block is <= maxChars characters (default 5,000).
+ *   - We NEVER break inside a slide. The only legal break points are the
+ *     boundaries between sections (Intro / Slide 1 / Slide 2 / ... / Closing).
+ *   - Sections are detected by lines starting with "### " (### Intro,
+ *     ### Slide 1, ### Closing, etc.) which matches the template.
+ *   - Blocks are separated by a header line so it's obvious which block
+ *     corresponds to which slides.
+ *   - If a single section is itself longer than maxChars, it gets its own
+ *     block anyway (with a note) rather than being silently truncated.
+ */
+export function chunkScriptForElevenLabs(
+  script: string,
+  maxChars = 5000,
+): string {
+  const text = script.replace(/\r\n/g, "\n").trim();
+  if (!text) return text;
+
+  // Split on lines beginning with "### " while keeping the header attached
+  // to the section that follows it.
+  const lines = text.split("\n");
+  const sections: { title: string; body: string }[] = [];
+  let current: { title: string; body: string } | null = null;
+  let preamble: string[] = [];
+
+  for (const line of lines) {
+    if (/^###\s+/.test(line)) {
+      if (current) sections.push(current);
+      current = { title: line.replace(/^###\s+/, "").trim(), body: line + "\n" };
+    } else if (current) {
+      current.body += line + "\n";
+    } else {
+      preamble.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  // If we couldn't find any "### " headers, return the script unchanged.
+  if (sections.length === 0) return text;
+
+  // Anything before the first "### " header gets prepended to the first section
+  // so we don't lose it. (Usually empty / whitespace.)
+  const preambleText = preamble.join("\n").trim();
+  if (preambleText) {
+    sections[0].body = preambleText + "\n\n" + sections[0].body;
+  }
+
+  // Group sections into blocks <= maxChars. Each block keeps whole sections.
+  type Block = { sections: { title: string; body: string }[]; chars: number };
+  const blocks: Block[] = [];
+  let block: Block = { sections: [], chars: 0 };
+
+  const flush = () => {
+    if (block.sections.length > 0) {
+      blocks.push(block);
+      block = { sections: [], chars: 0 };
+    }
+  };
+
+  for (const sec of sections) {
+    const secLen = sec.body.length;
+    if (block.sections.length === 0) {
+      // First section in a new block always goes in, even if it exceeds max.
+      block.sections.push(sec);
+      block.chars = secLen;
+      continue;
+    }
+    // +1 for the newline join between sections.
+    if (block.chars + 1 + secLen <= maxChars) {
+      block.sections.push(sec);
+      block.chars += 1 + secLen;
+    } else {
+      flush();
+      block.sections.push(sec);
+      block.chars = secLen;
+    }
+  }
+  flush();
+
+  // Render to plain text with clear block separators.
+  const total = blocks.length;
+  const rendered = blocks.map((b, i) => {
+    const titles = b.sections.map((s) => s.title).join(", ");
+    const oversize = b.chars > maxChars ? `  [WARNING: ${b.chars} chars - this section is longer than ${maxChars} on its own]` : "";
+    const header = `========== BLOCK ${i + 1} of ${total} (${b.chars} chars) - ${titles}${oversize} ==========`;
+    const body = b.sections.map((s) => s.body.trimEnd()).join("\n\n");
+    return `${header}\n\n${body}`;
+  });
+
+  return rendered.join("\n\n\n");
+}

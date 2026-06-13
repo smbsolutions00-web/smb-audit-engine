@@ -519,8 +519,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
-      const { generateElevenLabsScript } = await import("./elevenlabs-narration");
-      const script = await generateElevenLabsScript({
+      const { generateElevenLabsScript, chunkScriptForElevenLabs } = await import("./elevenlabs-narration");
+      const rawScript = await generateElevenLabsScript({
         pdfPath: filePath,
         context: {
           ownerName: intake.contactName || intake.clientName || audit.clientName,
@@ -531,6 +531,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           overallScore: audit.overallScore ?? null,
         },
       });
+      // Group the script into <=5,000-character blocks, breaking only at
+      // slide boundaries so it's easy to paste into ElevenLabs.
+      const script = chunkScriptForElevenLabs(rawScript, 5000);
 
       const slug = (audit.clientName || "audit")
         .toLowerCase()
