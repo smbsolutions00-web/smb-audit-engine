@@ -11,9 +11,9 @@
  *      the script as plain text ready to paste into ElevenLabs.
  *
  * The template lives at templates/elevenlabs-dj2-narration-template.txt.
- * The opening prayer + DJ intro and the warm closing
- * are reproduced verbatim with only [OWNER NAME/S] and [BUSINESS NAME]
- * substituted.
+ * The Intro section and the warm closing are reproduced verbatim with
+ * only [OWNER NAME/S], [BUSINESS NAME], and [CITY] substituted.
+ * There is no opening prayer or closing prayer in this template.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -184,13 +184,14 @@ export async function generateElevenLabsScript(
   const template = loadTemplate();
   const owner = context.ownerName?.trim() || context.businessName || "the owner";
   const business = context.businessName?.trim() || "the business";
+  const city = context.location?.trim() || "your local";
 
   const system = [
     "You are writing a finished ElevenLabs narration script. Your output goes straight into ElevenLabs - no preamble, no commentary, no markdown fences.",
     "You are voicing 'DJ #2', the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Voice: warm, conversational, confident, plain-English with light faith-based touches.",
     "ABSOLUTE RULES:",
     "1. Follow the supplied DJ #2 template structure exactly. Keep all section headers (### Slide N, ***).",
-    "2. The Opening prayer + DJ intro section and the warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S] and [BUSINESS NAME] substituted. Do NOT add a closing prayer — the template intentionally has only one prayer at the opening.",
+    "2. The Intro section and the warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S], [BUSINESS NAME], and [CITY] substituted. [OWNER NAME/S] should be replaced with the owner's first name only when used in the Intro greeting. Do NOT add any prayer (opening or closing). The template intentionally has no prayers.",
     "3. For each slide, replace the bracketed instruction lines with actual narration. Keep voice-direction tags like [warmly, conversational] on their own line above the spoken text.",
     "4. Use SSML <break time=\"0.5s\" /> or <break time=\"1.0s\" /> sparingly to pace key transitions. Never invent other SSML tags.",
     "5. Each slide section must stay under 5,000 characters of TOTAL text including voice-direction tags. Aim for 600-1,200 characters per slide.",
@@ -201,10 +202,10 @@ export async function generateElevenLabsScript(
   ].join("\n");
 
   const headerText = [
-    `OWNER NAME: ${owner}`,
-    `BUSINESS NAME: ${business}`,
+    `OWNER NAME: ${owner}  (use this to substitute [OWNER NAME/S]; in the Intro greeting use the owner's first name only)`,
+    `BUSINESS NAME: ${business}  (use this to substitute [BUSINESS NAME])`,
+    `CITY: ${city}  (use this to substitute [CITY])`,
     context.industry ? `INDUSTRY: ${context.industry}` : null,
-    context.location ? `LOCATION: ${context.location}` : null,
     context.overallGrade ? `OVERALL GRADE: ${context.overallGrade}` : null,
     typeof context.overallScore === "number" ? `OVERALL SCORE: ${context.overallScore}` : null,
     "",

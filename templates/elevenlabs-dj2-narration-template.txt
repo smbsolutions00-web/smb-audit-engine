@@ -11,34 +11,28 @@ Everything else can stay consistent.
 
 ## ELEVENLABS NARRATION TEMPLATE – DJ #2
 
-### Opening prayer + DJ intro
-
-[reverent, warm, calm]  
-Hey there, before we get started, if it’s ok with you I would like to pray over your business. <break time="0.5s" /> Father, thank You for [BUSINESS NAME] and for the work of [OWNER NAME/S] and their staff’s hands. Thank You for their wisdom, courage, and obedience to start [BUSINESS NAME], and for every opportunity You’ve placed before them. Give us clarity as we walk through this audit, wisdom to understand it, and direction for what comes next. Let this be productive, practical, and fruitful. In Jesus’ name, amen. <break time="1.0s" />
+### Intro
 
 [light, warm, slightly playful]  
-Before we jump in, let me introduce myself, [OWNER NAME/S].
+Hello, before we jump in, let me introduce myself, [OWNER NAME/S].
 
 [conversational, confident]  
-My name is DJ — you can just call me DJ Number Two.
-
-[slight smile]  
-I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions.
+My name is DJ. You can just call me DJ Number Two. I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Our team has taken a deep dive into [BUSINESS NAME], and I wanted to start by saying we really love the services you’re offering and the potential this practice has, not only in the [CITY] area, but nationwide.
 
 [steady, credible]  
-I work right beside him, and I’ve been trained through hundreds of hours of listening, learning, reviewing presentations, and supporting conversations across every level of business — from Fortune 50 CEOs all the way down to hardworking mom-and-pop companies.
+I know this because I’ve been trained through hundreds of hours of listening, learning, and reviewing market data, and through more than 100,000 business and marketing conversations across every level of the market, from Fortune 50 CEOs all the way down to hardworking mom-and-pop companies.
 
 [clear, reassuring]  
 So while Dwayne leads the vision, I’m here to help simplify this digital presence overview for you and your company in a way that’s clear, practical, and easy to follow.
 
 [encouraging]  
-My role in this presentation is simple: walk you through what matters, explain what the numbers mean, and help make the next steps feel manageable.
+And one of the biggest things I want to highlight as we go is this. AI works best when it supports your team, not replaces it. The goal is to take repetitive, time-consuming tasks off your plate so you and your staff can spend more time doing what you do best, caring for patients and growing the business in the right direction.
 
 [calm, inviting]  
-So give me just a few minutes to walk you through the full picture.
+My role in this presentation is simple. Walk you through what matters, explain what the numbers mean, and help make the next steps feel manageable.
 
 [reassuring]  
-Write down any questions that come up along the way, so we can make sure those get addressed.
+So give me just a few minutes to walk you through the full picture. Write down any questions that come up along the way, so we can make sure those get addressed.
 
 [gentle transition]  
 Alright, let’s walk through your audit together.
