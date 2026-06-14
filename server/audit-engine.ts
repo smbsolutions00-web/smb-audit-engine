@@ -584,6 +584,88 @@ Return only JSON.`;
 }
 
 /**
+ * Live-enrich ranking-keyword rows the LLM proposed by overriding their
+ * volume / CPC / competition / geoLayer with DataForSEO Keywords Data results.
+ *
+ * Per Dwayne's directive (June 14, 2026): live keyword API data is the source
+ * of truth. The keyword CSV is the research feed. The snapshot PDF is only
+ * supporting context, never the primary numeric source.
+ *
+ * Strategy:
+ *   - Keep the keyword strings and positions the LLM gave us (positions come
+ *     from the snapshot/CSV; live API does not return rank).
+ *   - Replace every numeric metric (volume, cpc, competition) with the live
+ *     result from the geo cascade.
+ *   - If a row had no DataForSEO hit at any layer, leave the LLM's number in
+ *     place rather than blanking it out, so the report still reads.
+ */
+async function enrichRankingKeywordsLive(
+  rows: KeywordRow[],
+  intake: IntakeData,
+): Promise<KeywordRow[]> {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+  if (!isGoogleAdsEnabled()) return rows;
+
+  // Use the same geo cascade we built for opportunity keywords.
+  let metroArea = intake.metroArea;
+  let surroundingCities = intake.surroundingCities;
+  if ((!metroArea || !surroundingCities?.length) && (intake.city || intake.state)) {
+    try {
+      const geo = await enrichIntakeGeo({
+        city: intake.city,
+        state: intake.state,
+        location: intake.location,
+      });
+      if (geo.metroArea && !metroArea) metroArea = geo.metroArea;
+      if (geo.surroundingCities && !surroundingCities?.length) {
+        surroundingCities = geo.surroundingCities;
+      }
+    } catch (err) {
+      console.warn("[ranking-keywords] on-the-fly geo enrichment failed", err);
+    }
+  }
+  const cascade: GeoCascade = {
+    city: intake.city || undefined,
+    state: intake.state || undefined,
+    adjacentCity: surroundingCities?.[0],
+    metroArea: metroArea || undefined,
+    surroundingCities,
+  };
+  const kws = rows.map((r) => r.keyword).filter(Boolean);
+  if (kws.length === 0) return rows;
+  try {
+    const enriched = await enrichKeywords(kws, cascade, {
+      threshold: 0,
+      acceptAnyNonNull: true,
+    });
+    const byKw = new Map<string, (typeof enriched)[number]>();
+    enriched.forEach((e) => byKw.set(e.keyword.toLowerCase(), e));
+    const hits = enriched.filter((e) => (e.metrics.sv ?? null) !== null).length;
+    console.log(
+      `[ranking-keywords] enrichment hits=${hits}/${enriched.length} ` +
+        `layers=${enriched.map((e) => e.metrics.geo_layer).join(",")}`,
+    );
+    return rows.map((r) => {
+      const e = byKw.get((r.keyword || "").toLowerCase());
+      if (!e) return r;
+      const live = (e.metrics.sv ?? null) !== null;
+      if (!live) return r;
+      return {
+        ...r,
+        volume: e.metrics.sv ?? r.volume,
+        cpc: e.metrics.cpc ?? r.cpc,
+        competition: e.metrics.comp ?? r.competition,
+        geoLayer: e.metrics.geo_layer,
+        volumeGeo: e.volumeGeo,
+      };
+    });
+  } catch (err) {
+    console.warn("[ranking-keywords] DataForSEO enrichment failed", err);
+    return rows;
+  }
+}
+
+/**
  * LLM-estimated keyword metrics fallback. Used only when DataForSEO returns
  * null across every geo layer for a keyword. Returns conservative, realistic
  * estimates clearly labelled as estimated in the report. Never invents a brand
@@ -827,9 +909,10 @@ ${keysearch.length > 0 ? JSON.stringify(keysearch.slice(0, 80), null, 2) : "(No 
 REQUIREMENTS:
 - SEO + Listings is the DEEPEST pillar; give it the most detail.
 - For seoDeep.domainAuthority: use the snapshot value if present, otherwise estimate from the website's age, backlink profile, and industry. Always return a number.
-- For seoDeep.rankingKeywords: include up to 15 rows. Prioritize keyword research data; merge with the snapshot. Sort by position ascending.
+- DATA PRECEDENCE for keywords (STRICT): treat live keyword API data (DataForSEO Keywords Data) as the source of truth, treat the keyword research CSV as the research feed, and treat the snapshot PDF only as supporting context, never as the primary numeric source. The server will hard-override opportunityKeywords and may hard-override rankingKeywords with live DataForSEO volume / CPC / competition / geo data after your output is parsed. Your job for keyword fields is to propose candidate keywords with sensible intent labels; do not invent precise volume / CPC numbers when the live API will provide them.
+- For seoDeep.rankingKeywords: include up to 15 candidate rows the business plausibly ranks for. Prioritize keyword research data; use the snapshot only as a hint. Sort by position ascending.
 - BRAND NAMING: NEVER use the words "Vendasta", "Manus", or any third-party platform brand name in any string field of the report. If you need to refer to the source platform, use "SMB Solutions CRM" or simply "our system". This is a strict requirement.
-- For seoDeep.opportunityKeywords: identify up to 12 high-value gap keywords (decent volume, moderate difficulty, transactional/commercial intent). Use Keysearch data + your knowledge of the industry.
+- For seoDeep.opportunityKeywords: identify up to 12 high-value gap keywords (decent volume, moderate difficulty, transactional/commercial intent). Use keyword research data + your knowledge of the industry. The server will replace these with live-API-enriched rows when available.
 - Listings: cover Google, Bing, Facebook, Yelp, Apple Maps, Instagram, BBB, and 5+ industry-specific directories.
 - AI Automation platforms array MUST include all SIX platforms in the order shown above (ChatGPT, Google Gemini, Perplexity, Grok, Microsoft Copilot, Claude). For each, judge whether the business is likely to be surfaced/cited when someone asks that AI for a recommendation in this category and market. Notes should be plain-English and specific (e.g., "Not cited when prompting ChatGPT for HVAC contractors near Macon, GA. The site has no schema.org markup and no AI-readable FAQ content.").
 - Recommendations and Immediate Action Plan tasks must be concrete and specific (e.g., "Claim and optimize Google Business Profile with 10 photos and service categories" not "improve Google listing").
@@ -908,6 +991,21 @@ Return ONLY the JSON object.`;
     }
   } catch (err) {
     console.warn("[generateReport] opportunity-keywords promise rejected", err);
+  }
+
+  // Enrich rankingKeywords with live DataForSEO Keywords Data so volume / CPC /
+  // competition reflect the live API rather than snapshot-PDF numbers or model
+  // guesses. Per directive: live keyword API is the source of truth; the
+  // snapshot is only context.
+  try {
+    if (parsed.seoDeep?.rankingKeywords?.length) {
+      parsed.seoDeep.rankingKeywords = await enrichRankingKeywordsLive(
+        parsed.seoDeep.rankingKeywords,
+        intake,
+      );
+    }
+  } catch (err) {
+    console.warn("[generateReport] ranking-keywords enrichment failed", err);
   }
 
   // Classify every keyword row (ranking + opportunity) as brand / local / national
