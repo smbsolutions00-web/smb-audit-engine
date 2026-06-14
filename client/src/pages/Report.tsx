@@ -2869,33 +2869,115 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
     return `${date} at ${time}`;
   }
 
-  // Trigger ElevenLabs script generation directly from the deck-complete card
-  // (uses the just-built Manus deck PDF as the source, no manual re-upload).
+  // Inline ElevenLabs script generation + viewer.
+  // Pulls (or regenerates) the script from the deck PDF, opens a dialog with
+  // edit + download, and surfaces a persistent "View Script" button after
+  // generation so the user never has to scroll hunting for it.
+  const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
   const [scriptBusy, setScriptBusy] = useState(false);
-  async function handleGenerateScript() {
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [scriptText, setScriptText] = useState("");
+  const [scriptHasGenerated, setScriptHasGenerated] = useState(false);
+  const [scriptGeneratedAt, setScriptGeneratedAt] = useState<number | undefined>();
+  const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj2-script.txt");
+  const [scriptDirty, setScriptDirty] = useState(false);
+  const [scriptSaving, setScriptSaving] = useState(false);
+  const [scriptError, setScriptError] = useState<string | null>(null);
+
+  // On mount (when deck is complete), probe the script endpoint once so a
+  // previously-generated script is recognized without re-running generation.
+  useEffect(() => {
+    if (!isComplete) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${scriptUrl}?format=json&peek=1`, {
+          credentials: "include",
+        });
+        if (!res.ok) return; // 404 etc. just means not yet generated
+        const json = await res.json();
+        if (cancelled) return;
+        // hasGenerated=true means a script exists in the audit history but the
+        // body isn't cached server-side (only edited scripts are persisted).
+        // The card shows "Last generated at X" + a View button that will
+        // regenerate on demand.
+        if (json?.hasGenerated || json?.script) {
+          setScriptText(json.script || "");
+          setScriptHasGenerated(true);
+          setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
+          setScriptGeneratedAt(json.generatedAt);
+        }
+      } catch {
+        /* ignore probe errors */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isComplete, scriptUrl]);
+
+  async function handleGenerateScript(opts: { regenerate?: boolean } = {}) {
     setScriptBusy(true);
+    setScriptError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}/api/audits/${auditId}/elevenlabs-script?format=json&regenerate=1`,
-        { credentials: "include" },
-      );
+      const url = opts.regenerate
+        ? `${scriptUrl}?format=json&regenerate=1`
+        : `${scriptUrl}?format=json`;
+      const res = await fetch(url, { credentials: "include" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
-      toast({
-        title: "ElevenLabs script generated",
-        description: `${(json.script || "").length.toLocaleString()} characters ready. Open the final deliverable section to view, edit, or download.`,
-      });
-      // Refresh the audit query so the timeline picks up the new event.
+      setScriptText(json.script || "");
+      setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
+      setScriptGeneratedAt(json.generatedAt || Date.now());
+      setScriptHasGenerated(true);
+      setScriptDirty(false);
+      setScriptOpen(true);
       queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
     } catch (err: any) {
+      const msg = err?.message || "Unknown error.";
+      setScriptError(msg);
       toast({
         title: "Could not generate the script",
-        description: err?.message || "Unknown error.",
+        description: msg,
         variant: "destructive",
       });
     } finally {
       setScriptBusy(false);
     }
+  }
+
+  async function handleSaveScript() {
+    setScriptSaving(true);
+    setScriptError(null);
+    try {
+      const res = await fetch(scriptUrl, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script: scriptText }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.message || `HTTP ${res.status}`);
+      }
+      setScriptDirty(false);
+      toast({ title: "Script saved", description: "Your edits are stored on this audit." });
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+    } catch (err: any) {
+      setScriptError(err?.message || "Save failed.");
+    } finally {
+      setScriptSaving(false);
+    }
+  }
+
+  function handleDownloadScript() {
+    const blob = new Blob([scriptText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = scriptFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -3042,30 +3124,73 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                 Skips the manual upload step in the Final Deliverable section. */}
             <div className="mt-1 flex flex-col gap-2 border-t border-emerald-500/20 pt-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <div className="text-sm font-medium">Next: ElevenLabs DJ #2 script</div>
-                <div className="text-xs text-muted-foreground">
-                  Generate the narration script straight from this deck PDF. You can review and edit it in the Final Deliverable section below.
+                <div className="text-sm font-medium">
+                  {scriptHasGenerated ? "ElevenLabs DJ #2 script" : "Next: ElevenLabs DJ #2 script"}
                 </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleGenerateScript}
-                disabled={scriptBusy || !state.hasPdf}
-                data-testid="button-generate-elevenlabs-from-deck"
-              >
-                {scriptBusy ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    Generating…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-1.5 h-4 w-4" />
-                    Generate ElevenLabs Script
-                  </>
+                <div className="text-xs text-muted-foreground">
+                  {scriptHasGenerated ? (
+                    <>Last generated {formatStamp(scriptGeneratedAt) || "just now"}. View, edit, or download.</>
+                  ) : (
+                    <>Generate the narration script straight from this deck PDF. You can review and edit it right here.</>
+                  )}
+                </div>
+                {scriptError && (
+                  <div className="mt-1 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+                    {scriptError}
+                  </div>
                 )}
-              </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {scriptHasGenerated && scriptText && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleDownloadScript}
+                    data-testid="button-download-elevenlabs-from-deck"
+                  >
+                    <FileDown className="mr-1.5 h-4 w-4" />
+                    Download .txt
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    if (scriptText) {
+                      // Already loaded in memory, just open dialog.
+                      setScriptOpen(true);
+                    } else {
+                      // Either fresh generate (no prior script) or re-load
+                      // body for a previously generated script.
+                      await handleGenerateScript();
+                    }
+                  }}
+                  disabled={scriptBusy || !state.hasPdf}
+                  data-testid="button-generate-elevenlabs-from-deck"
+                >
+                  {scriptBusy ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      Generating…
+                    </>
+                  ) : scriptHasGenerated && scriptText ? (
+                    <>
+                      <Eye className="mr-1.5 h-4 w-4" />
+                      View &amp; Edit Script
+                    </>
+                  ) : scriptHasGenerated ? (
+                    <>
+                      <Eye className="mr-1.5 h-4 w-4" />
+                      View Script
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-1.5 h-4 w-4" />
+                      Generate ElevenLabs Script
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
             {state.taskUrl && (
               <a
@@ -3123,6 +3248,114 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           </div>
         )}
       </div>
+
+      {/* -------- Inline ElevenLabs script viewer + editor -------- */}
+      <Dialog
+        open={scriptOpen}
+        onOpenChange={(o) => {
+          if (!o && scriptDirty) {
+            const ok = window.confirm("You have unsaved edits. Close anyway?");
+            if (!ok) return;
+          }
+          setScriptOpen(o);
+        }}
+      >
+        <DialogContent
+          className="max-w-4xl"
+          data-testid="dialog-deck-elevenlabs-script"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkle className="h-5 w-5 text-accent" />
+              ElevenLabs DJ #2 Script
+              {scriptDirty && (
+                <Badge variant="outline" className="ml-1 border-amber-500 text-xs text-amber-600">
+                  Unsaved changes
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Preview, edit, save, and download the narration script. Edits are
+              stored on this audit and served next time you open it. Regenerate
+              to rebuild from the Manus deck PDF.
+              {scriptGeneratedAt && (
+                <> Generated {formatStamp(scriptGeneratedAt)}.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {scriptBusy && !scriptText ? (
+            <div className="flex h-96 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Generating script… this takes about 20 seconds.
+            </div>
+          ) : (
+            <Textarea
+              value={scriptText}
+              onChange={(e) => {
+                setScriptText(e.target.value);
+                setScriptDirty(true);
+              }}
+              className="h-96 max-h-[60vh] min-h-[24rem] font-mono text-xs"
+              spellCheck={false}
+              data-testid="textarea-deck-elevenlabs-script"
+            />
+          )}
+
+          {scriptError && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              {scriptError}
+            </div>
+          )}
+
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handleGenerateScript({ regenerate: true })}
+                disabled={scriptBusy || scriptSaving}
+                data-testid="button-deck-regenerate-script"
+              >
+                <RotateCw className="mr-1.5 h-4 w-4" />
+                Regenerate
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDownloadScript}
+                disabled={!scriptText || scriptBusy}
+                data-testid="button-deck-download-script"
+              >
+                <FileDown className="mr-1.5 h-4 w-4" />
+                Download .txt
+              </Button>
+              <Button
+                type="button"
+                onClick={handleSaveScript}
+                disabled={!scriptDirty || scriptSaving || scriptBusy}
+                className="bg-accent text-accent-foreground hover:bg-accent/90"
+                data-testid="button-deck-save-script"
+              >
+                {scriptSaving ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-1.5 h-4 w-4" />
+                    Save
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

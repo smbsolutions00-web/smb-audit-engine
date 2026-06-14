@@ -661,13 +661,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       //   ?format=json   -> return { script, edited, generatedAt } for the editor
       //   ?format=download (default) -> download as a .txt attachment
       //   ?regenerate=1  -> ignore any saved editedScript and rebuild from the PDF
+      //   ?peek=1        -> only return a saved script if it exists, never
+      //                      trigger a fresh generation. Used by the deck card
+      //                      on mount to surface an already-generated script.
       const wantsJson = req.query.format === "json";
       const forceRegenerate = req.query.regenerate === "1";
+      const peekOnly = req.query.peek === "1";
       const slug = (audit.clientName || "audit")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "") || "audit";
       const filename = `${slug}-elevenlabs-dj2-script.txt`;
+
+      // Pull the latest script_generated event timestamp so the UI can show
+      // "Generated Jun 14 at 6:07 PM" instead of an empty value.
+      let lastGeneratedAt: number | undefined;
+      try {
+        const eventsRaw = audit.eventLog ? JSON.parse(audit.eventLog) : [];
+        if (Array.isArray(eventsRaw)) {
+          for (let i = eventsRaw.length - 1; i >= 0; i--) {
+            const ev = eventsRaw[i];
+            if (ev?.type === "script_generated" && ev?.at) {
+              lastGeneratedAt = new Date(ev.at).getTime();
+              break;
+            }
+          }
+        }
+      } catch {
+        /* eventLog parse errors are non-fatal */
+      }
 
       // If we have a saved edited script and the caller is NOT forcing a
       // regeneration, serve it verbatim. This is the path the View/Edit modal
@@ -678,11 +700,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             script: audit.editedScript,
             edited: true,
             filename,
+            generatedAt: lastGeneratedAt,
           });
         }
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
         return res.send(audit.editedScript);
+      }
+
+      // Peek mode: never trigger a regenerate. We use the script_generated
+      // event log timestamp as the signal that a script has been produced at
+      // least once (since unedited scripts are not persisted to editedScript).
+      // The deck card uses this to show "Last generated at X" without having
+      // to rebuild the script.
+      if (peekOnly) {
+        if (lastGeneratedAt) {
+          return res.json({
+            script: "",
+            edited: false,
+            filename,
+            generatedAt: lastGeneratedAt,
+            hasGenerated: true,
+          });
+        }
+        return res.status(404).json({ message: "No saved script yet." });
       }
 
       // Pass the structured report into the narration so the model can:
@@ -717,7 +758,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       if (wantsJson) {
-        return res.json({ script, edited: false, filename });
+        return res.json({
+          script,
+          edited: false,
+          filename,
+          generatedAt: Date.now(),
+        });
       }
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
