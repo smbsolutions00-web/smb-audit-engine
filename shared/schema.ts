@@ -62,6 +62,15 @@ export interface AiAutomationPillar extends PillarReport {
 
 export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "none";
 
+/**
+ * Strategic tier for narration. Drives the Brand → Local → National story
+ * arc Dwayne wants in the audit voiceover:
+ *   - brand: ranking for the business's own name or domain (limited reach)
+ *   - local: high-intent searches in the client's city / metro (real opportunity)
+ *   - national: large volume but geographically broad (long-term reach)
+ */
+export type KeywordTier = "brand" | "local" | "national";
+
 export interface KeywordRow {
   keyword: string;
   position?: number;
@@ -73,6 +82,7 @@ export interface KeywordRow {
   url?: string;
   geoLayer?: GeoLayer;   // Which geo layer produced the displayed volume
   volumeGeo?: string;    // Human-readable label, e.g. "Frisco, TX" or "Dallas Metro"
+  tier?: KeywordTier;    // Brand / Local / National classification for narration
 }
 
 export interface ListingRow {
@@ -153,6 +163,31 @@ export interface ImmediateActionPlan {
   expectedOutcomes: string[];       // What "better" looks like once these are done
 }
 
+/**
+ * Live-Google verified facts that always override conflicting snapshot data.
+ * Populated by server/live-google-validation.ts before the audit narrative
+ * is generated. When present, downstream code MUST trust these over Vendasta.
+ */
+export interface LiveValidation {
+  gbp: {
+    present: boolean;
+    rating: number | null;
+    reviewCount: number | null;
+    phone: string | null;
+    address: string | null;
+    reviewsUrl: string | null;
+  };
+  social: {
+    platform: "facebook" | "instagram" | "linkedin" | "tiktok" | "youtube";
+    present: boolean;
+    url: string | null;
+  }[];
+  /** Human-readable diff between snapshot and live data, for our records. */
+  discrepancies: string[];
+  /** Which provider answered ("dataforseo" | "serper" | "none"). */
+  provider: string;
+}
+
 export interface ReportData {
   executiveSummary: {
     diagnosis: string;
@@ -168,4 +203,6 @@ export interface ReportData {
   seoDeep: SeoDeepDive;
   websitePerformance: WebsitePerformance;
   immediateActionPlan: ImmediateActionPlan;
+  /** Optional live-Google verified facts. When absent, snapshot data stands. */
+  liveValidation?: LiveValidation;
 }

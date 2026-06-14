@@ -575,6 +575,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
+      // Pass the structured report into the narration so the model can:
+      //   - Use the Brand → Local → National keyword tiers we already classified.
+      //   - Honor the live-Google validation block (reviews, GBP, social) and
+      //     refuse to claim "no reviews" when verified data says otherwise.
+      const reportData = audit.reportData ? JSON.parse(audit.reportData) : null;
+
       const { generateElevenLabsScript, chunkScriptForElevenLabs } = await import("./elevenlabs-narration");
       const rawScript = await generateElevenLabsScript({
         pdfPath: filePath,
@@ -588,6 +594,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           location: audit.location ?? undefined,
           overallGrade: audit.overallGrade ?? null,
           overallScore: audit.overallScore ?? null,
+          reportData,
         },
       });
       // Group the script into <=5,000-character blocks, breaking only at

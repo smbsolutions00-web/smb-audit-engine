@@ -5,7 +5,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import Papa from "papaparse";
 // pdf-parse has no proper ESM types; use dynamic import
-import type { ReportData, KeywordRow, ListingRow, Grade } from "@shared/schema";
+import type { ReportData, KeywordRow, ListingRow, Grade, KeywordTier, LiveValidation } from "@shared/schema";
+import { validateBusinessLive, reconcile, isLiveValidationEnabled } from "./live-google-validation";
 
 // Anthropic API expects hyphenated IDs. The underscore form is a sandbox-only alias.
 // claude-sonnet-4-6 is the latest Sonnet (Feb 2026). Override with ANTHROPIC_MODEL env var.
@@ -467,6 +468,101 @@ Return only JSON.`;
   }
 }
 
+/* -------------------- Keyword tier classification -------------------- */
+
+/**
+ * Classify each keyword as brand / local / national for the Brand → Local →
+ * National narration arc Dwayne wants. Deterministic so the narration never
+ * disagrees with the report data:
+ *
+ *   - brand: contains the business name (any token) or the domain root.
+ *   - local: contains the city, metro, state name, state postal code (TX, NY),
+ *     surrounding city, or common local modifiers ("near me").
+ *   - national: everything else.
+ *
+ * Applied to BOTH ranking and opportunity keyword arrays.
+ */
+function tokenize(s?: string): string[] {
+  if (!s) return [];
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+}
+
+const STATE_ABBREVIATIONS: Record<string, string> = {
+  alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca",
+  colorado: "co", connecticut: "ct", delaware: "de", florida: "fl", georgia: "ga",
+  hawaii: "hi", idaho: "id", illinois: "il", indiana: "in", iowa: "ia",
+  kansas: "ks", kentucky: "ky", louisiana: "la", maine: "me", maryland: "md",
+  massachusetts: "ma", michigan: "mi", minnesota: "mn", mississippi: "ms",
+  missouri: "mo", montana: "mt", nebraska: "ne", nevada: "nv", "new hampshire": "nh",
+  "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+  "north dakota": "nd", ohio: "oh", oklahoma: "ok", oregon: "or", pennsylvania: "pa",
+  "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", tennessee: "tn",
+  texas: "tx", utah: "ut", vermont: "vt", virginia: "va", washington: "wa",
+  "west virginia": "wv", wisconsin: "wi", wyoming: "wy",
+};
+
+export function classifyKeywordTier(
+  keyword: string,
+  ctx: {
+    businessName?: string;
+    website?: string;
+    city?: string;
+    state?: string;
+    metroArea?: string;
+    surroundingCities?: string[];
+  },
+): KeywordTier {
+  const kw = keyword.toLowerCase();
+  const tokens = tokenize(keyword);
+
+  // ---- Brand check ----
+  // The business name tokenized, ignoring noise words.
+  const brandTokens = tokenize(ctx.businessName).filter(
+    (t) => !/^(llc|inc|co|corp|the|and|&)$/.test(t),
+  );
+  if (brandTokens.length > 0) {
+    // Match if any meaningful brand token appears in the keyword.
+    if (brandTokens.some((bt) => tokens.includes(bt))) return "brand";
+    // Also match contiguous brand phrase (e.g. "fiorinabeauty")
+    const brandPhrase = brandTokens.join("");
+    if (brandPhrase.length >= 4 && kw.replace(/\s+/g, "").includes(brandPhrase)) return "brand";
+  }
+  // Domain root match (e.g. "fiorinabeauty.com")
+  if (ctx.website) {
+    const domain = ctx.website
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .split("/")[0]
+      .split(".")[0];
+    if (domain.length >= 4 && kw.includes(domain)) return "brand";
+  }
+
+  // ---- Local check ----
+  const localTerms = new Set<string>();
+  for (const v of [ctx.city, ctx.metroArea, ctx.state, ...(ctx.surroundingCities || [])]) {
+    for (const t of tokenize(v)) localTerms.add(t);
+  }
+  if (ctx.state) {
+    const abbr = STATE_ABBREVIATIONS[ctx.state.toLowerCase().trim()];
+    if (abbr) localTerms.add(abbr);
+  }
+  if (tokens.some((t) => localTerms.has(t))) return "local";
+  if (/\bnear\s+me\b/i.test(keyword)) return "local";
+
+  // ---- Default: national ----
+  return "national";
+}
+
+function tagKeywordTiers(rows: KeywordRow[] | undefined, ctx: Parameters<typeof classifyKeywordTier>[1]): KeywordRow[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((r) => ({ ...r, tier: r.tier || classifyKeywordTier(r.keyword || "", ctx) }));
+}
+
 /* -------------------- Report generation -------------------- */
 
 export async function generateReport(opts: {
@@ -581,6 +677,21 @@ Return ONLY the JSON object.`;
   // main report generation. Whichever finishes first waits for the other.
   const opportunityKeywordsPromise = buildLocalOpportunityKeywords(intake, vendasta);
 
+  // Kick off the live-Google validation pass in parallel. This is what saves us
+  // from claiming "no GBP" or "no reviews" when Google clearly shows otherwise.
+  // Non-blocking: if it fails, we still ship a report from snapshot data.
+  const liveValidationPromise = isLiveValidationEnabled()
+    ? validateBusinessLive({
+        businessName: clientName,
+        city: intake.city,
+        state: intake.state,
+        website,
+      }).catch((err) => {
+        console.warn("[generateReport] live validation failed:", err?.message || err);
+        return null;
+      })
+    : Promise.resolve(null);
+
   const txt = await chatJSON(sys, usr, 16000);
   const parsed = extractJson<ReportData & { overallGrade: Grade; overallScore: number }>(
     txt,
@@ -630,6 +741,117 @@ Return ONLY the JSON object.`;
     }
   } catch (err) {
     console.warn("[generateReport] opportunity-keywords promise rejected", err);
+  }
+
+  // Classify every keyword row (ranking + opportunity) as brand / local / national
+  // so the narration can walk Brand → Local → National in that order.
+  const tierCtx = {
+    businessName: clientName,
+    website,
+    city: intake.city,
+    state: intake.state,
+    metroArea: intake.metroArea,
+    surroundingCities: intake.surroundingCities,
+  };
+  parsed.seoDeep.rankingKeywords = tagKeywordTiers(parsed.seoDeep.rankingKeywords, tierCtx);
+  parsed.seoDeep.opportunityKeywords = tagKeywordTiers(parsed.seoDeep.opportunityKeywords, tierCtx);
+
+  // Apply live-Google validation overrides. Per directive: live ALWAYS wins.
+  try {
+    const live = await liveValidationPromise;
+    if (live && live.ok) {
+      const discrepancies = reconcile(live, {
+        reviewCount: vendasta.reviewCount,
+        averageRating: vendasta.averageRating,
+        hasGbp: (vendasta.listings || []).some(
+          (l) => /google business profile|gbp|google my business/i.test(l.directory) && l.status === "Listed",
+        ),
+      });
+      if (discrepancies.length > 0) {
+        console.log("[generateReport] live-validation discrepancies:", discrepancies);
+      }
+
+      // Attach the live validation block so downstream code (UI + narration)
+      // can reference verified facts directly.
+      parsed.liveValidation = {
+        gbp: {
+          present: live.gbp.present,
+          rating: live.gbp.rating,
+          reviewCount: live.gbp.reviewCount,
+          phone: live.gbp.phone,
+          address: live.gbp.address,
+          reviewsUrl: live.gbp.reviewsUrl,
+        },
+        social: live.social.map((s) => ({ platform: s.platform, present: s.present, url: s.url })),
+        discrepancies,
+        provider: live.provider,
+      };
+
+      // Override the Reputation pillar copy when live shows reviews exist.
+      // We replace the false "no reviews" framing with a faithful summary
+      // while keeping any legitimate gaps the LLM identified.
+      if (live.gbp.reviewCount && live.gbp.reviewCount > 0 && parsed.pillars?.reputation) {
+        const verifiedLine =
+          `Verified via live Google search on ${new Date().toISOString().slice(0, 10)}: ` +
+          `Google Business Profile is active with ${live.gbp.reviewCount} review${live.gbp.reviewCount === 1 ? "" : "s"}` +
+          (live.gbp.rating ? ` at ${live.gbp.rating} stars.` : ".");
+        parsed.pillars.reputation.summary = verifiedLine + " " +
+          (parsed.pillars.reputation.summary || "");
+        // Remove any "no reviews" / "no GBP" claims from gaps and strengths.
+        const stripBadClaims = (arr?: string[]) =>
+          (arr || []).filter(
+            (g) =>
+              !/no\s+reviews|zero\s+reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business/i.test(
+                g,
+              ),
+          );
+        parsed.pillars.reputation.gaps = stripBadClaims(parsed.pillars.reputation.gaps);
+        parsed.pillars.reputation.strengths = [
+          `Active Google Business Profile with ${live.gbp.reviewCount} review${live.gbp.reviewCount === 1 ? "" : "s"}${live.gbp.rating ? ` at ${live.gbp.rating} stars` : ""}.`,
+          ...stripBadClaims(parsed.pillars.reputation.strengths),
+        ];
+      }
+
+      // Override the listings array: if Google says GBP exists, mark it Listed.
+      if (live.gbp.present && parsed.seoDeep?.listings) {
+        const gbpIdx = parsed.seoDeep.listings.findIndex((l) =>
+          /google business profile|gbp|google my business/i.test(l.directory),
+        );
+        const gbpRow: ListingRow = {
+          directory: "Google Business Profile",
+          status: "Listed",
+          napAccurate: true,
+          notes: `Verified live: ${live.gbp.reviewCount ?? 0} reviews${live.gbp.rating ? `, ${live.gbp.rating} stars` : ""}${live.gbp.phone ? `, phone ${live.gbp.phone}` : ""}.`,
+        };
+        if (gbpIdx >= 0) parsed.seoDeep.listings[gbpIdx] = gbpRow;
+        else parsed.seoDeep.listings.unshift(gbpRow);
+      }
+
+      // Override the Social pillar gaps for platforms we confirmed exist.
+      if (parsed.pillars?.socialMedia) {
+        const presentPlatforms = live.social.filter((s) => s.present).map((s) => s.platform);
+        if (presentPlatforms.length > 0) {
+          const labels: Record<string, string> = {
+            facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn",
+            tiktok: "TikTok", youtube: "YouTube",
+          };
+          const presentLabel = presentPlatforms.map((p) => labels[p] || p).join(", ");
+          // Strip any "no presence on X" claims for platforms we verified exist.
+          parsed.pillars.socialMedia.gaps = (parsed.pillars.socialMedia.gaps || []).filter((g) => {
+            const gl = g.toLowerCase();
+            return !presentPlatforms.some((p) => gl.includes(`no ${p}`) || gl.includes(`missing ${p}`) || gl.includes(`no presence on ${p}`));
+          });
+          parsed.pillars.socialMedia.strengths = [
+            `Verified active social profiles: ${presentLabel}.`,
+            ...(parsed.pillars.socialMedia.strengths || []),
+          ];
+        }
+      }
+    } else if (live === null || (live && !live.ok)) {
+      console.log("[generateReport] live validation returned no data; snapshot stands");
+    }
+  } catch (err) {
+    console.warn("[generateReport] live-validation merge failed", err);
   }
 
   // Server-side safety net: strip em-dashes / en-dashes from every string field.

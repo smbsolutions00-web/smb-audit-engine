@@ -103,6 +103,10 @@ export interface NarrationContext {
   location?: string;
   overallGrade?: string | null;
   overallScore?: number | null;
+  /** Full structured ReportData (with tiered keywords + liveValidation block).
+   *  Passed through opaquely so the narration model can ground itself in
+   *  verified facts and the Brand → Local → National keyword arc. */
+  reportData?: any;
 }
 
 // First-name parser moved to ./lib/names.ts so the audit pipeline can
@@ -152,6 +156,86 @@ function renderPdfToPngBase64(pdfPath: string): string[] {
       /* ignore */
     }
   }
+}
+
+/* ---------------------- Verified facts + tiered keyword blocks ---------------------- */
+
+/**
+ * Build the VERIFIED FACTS block that the narration model must trust over
+ * any contradicting slide content. Pulled from reportData.liveValidation.
+ * Returns an empty string if there is nothing verified.
+ */
+function buildVerifiedFactsBlock(report: any): string {
+  const lv = report?.liveValidation;
+  if (!lv) return "";
+  const lines: string[] = ["=== VERIFIED FACTS (live Google check; trust these over the slides) ==="];
+  if (lv.gbp?.present) {
+    const parts: string[] = ["Google Business Profile: ACTIVE"];
+    if (typeof lv.gbp.rating === "number") parts.push(`rating ${lv.gbp.rating} stars`);
+    if (typeof lv.gbp.reviewCount === "number") parts.push(`${lv.gbp.reviewCount} reviews`);
+    if (lv.gbp.phone) parts.push(`phone ${lv.gbp.phone}`);
+    if (lv.gbp.address) parts.push(`address ${lv.gbp.address}`);
+    lines.push(`- ${parts.join(", ")}.`);
+  } else {
+    lines.push("- Google Business Profile: NOT FOUND in live search.");
+  }
+  const social = Array.isArray(lv.social) ? lv.social : [];
+  const present = social.filter((s: any) => s.present).map((s: any) => s.platform);
+  const absent = social.filter((s: any) => !s.present).map((s: any) => s.platform);
+  if (present.length > 0) lines.push(`- Social profiles CONFIRMED active: ${present.join(", ")}.`);
+  if (absent.length > 0) lines.push(`- Social profiles NOT FOUND in live search: ${absent.join(", ")}.`);
+  if (Array.isArray(lv.discrepancies) && lv.discrepancies.length > 0) {
+    lines.push("- Discrepancies vs snapshot: " + lv.discrepancies.join(" | "));
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Build the KEYWORD TIERS block that powers the Brand → Local → National
+ * narration arc. We surface up to 5 of each tier with volume + position so
+ * the model can reference real numbers instead of guessing.
+ */
+function buildKeywordTiersBlock(report: any): string {
+  const seo = report?.seoDeep;
+  if (!seo) return "";
+  const ranking = Array.isArray(seo.rankingKeywords) ? seo.rankingKeywords : [];
+  const opportunity = Array.isArray(seo.opportunityKeywords) ? seo.opportunityKeywords : [];
+  // Combine then dedupe by keyword so each keyword shows up in exactly one tier.
+  const all: any[] = [...ranking, ...opportunity];
+  if (all.length === 0) return "";
+  const seen = new Set<string>();
+  const uniq = all.filter((r) => {
+    const k = (r.keyword || "").toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  const fmt = (r: any) => {
+    const parts: string[] = [`"${r.keyword}"`];
+    if (typeof r.position === "number") parts.push(`pos #${r.position}`);
+    if (typeof r.volume === "number") parts.push(`${r.volume.toLocaleString()} searches/mo`);
+    if (r.volumeGeo) parts.push(r.volumeGeo);
+    return parts.join(", ");
+  };
+
+  const brand = uniq.filter((r) => r.tier === "brand").slice(0, 5);
+  const local = uniq.filter((r) => r.tier === "local").slice(0, 8);
+  const national = uniq.filter((r) => r.tier === "national").slice(0, 5);
+
+  const lines: string[] = ["=== KEYWORD STORY ARC (use these tiers in order on any keyword slide) ==="];
+  lines.push("BRAND tier (ranking for the business's own name; limited reach):");
+  if (brand.length === 0) lines.push("  (none yet)");
+  else brand.forEach((r) => lines.push(`  - ${fmt(r)}`));
+  lines.push("LOCAL high-intent tier (real opportunity, people searching with intent in the city/metro):");
+  if (local.length === 0) lines.push("  (none yet, frame as a future opportunity)");
+  else local.forEach((r) => lines.push(`  - ${fmt(r)}`));
+  lines.push("NATIONAL tier (long-term reach, broad volume):");
+  if (national.length === 0) lines.push("  (none yet, frame as a long-term horizon)");
+  else national.forEach((r) => lines.push(`  - ${fmt(r)}`));
+  lines.push("");
+  return lines.join("\n");
 }
 
 /**
@@ -206,8 +290,15 @@ export async function generateElevenLabsScript(
     "6. Produce one ### Slide N section for each slide / page provided. If you receive 12 slides, produce slides 1-12. If you receive 8, produce slides 1-8.",
     "7. Ground every slide narration in the actual content visible on that slide. Do not invent grades, scores, or numbers that aren't present.",
     "8. Plain English only - explain anything technical with one short analogy.",
-    "9. Output the script as plain text exactly the way it should be pasted into ElevenLabs.",
+    "9. CREDIBILITY OVERRIDE (most important rule). If a VERIFIED FACTS block is supplied below, those facts come from a live Google search and are CORRECT. Slides may contradict them (the slides are built from older snapshot data). When that happens you MUST trust the verified facts and silently correct the narration. Examples: if the slide says 'No Google Business Profile' but verified facts say there are 15 reviews at 5.0 stars, do NOT echo the slide; speak to the strength of the existing reviews and the opportunity to grow on top of them. If the slide says 'no Facebook' but verified facts confirm a Facebook profile, acknowledge it as a foundation to build on. Never invent a number; only use verified numbers when correcting.",
+    "10. KEYWORD STORY ARC (when keyword tiers are supplied). On any slide that covers SEO keywords, walk the listener through the data in a clear arc:\n   - FIRST the BRAND tier: 'Yes, the business is ranking for its own name and a few brand variants. That is expected; only people who already know the brand are searching for it.'\n   - SECOND the LOCAL tier (the real opportunity): 'Here is where the bigger play is. These are people in the local area searching with intent for the solution the business provides, without knowing the brand exists yet. For example, [pick one or two of the local keywords with their volume numbers] are looking for this every month.'\n   - THIRD the NATIONAL tier (long-term reach): 'And there is a longer horizon play. These are the larger national volume terms (mention 1-2 examples). Once authority grows, this is where real scale shows up.'\n   If a tier is empty (e.g. no national keywords yet), acknowledge it briefly as a future opportunity rather than skipping silently. Always use the actual numbers from the data block, not invented ones.",
+    "11. Output the script as plain text exactly the way it should be pasted into ElevenLabs.",
   ].join("\n");
+
+  // Build the VERIFIED FACTS + KEYWORD TIERS block from the structured report
+  // so the narration can override snapshot errors and tell the right story.
+  const verifiedFactsBlock = buildVerifiedFactsBlock(context.reportData);
+  const keywordTiersBlock = buildKeywordTiersBlock(context.reportData);
 
   const headerText = [
     `OWNER FULL NAME: ${owner}`,
@@ -219,6 +310,8 @@ export async function generateElevenLabsScript(
     context.overallGrade ? `OVERALL GRADE: ${context.overallGrade}` : null,
     typeof context.overallScore === "number" ? `OVERALL SCORE: ${context.overallScore}` : null,
     "",
+    verifiedFactsBlock,
+    keywordTiersBlock,
     "=== DJ #2 TEMPLATE (follow this structure exactly) ===",
     template,
     "",
