@@ -30,6 +30,7 @@ const DFS_BASE = "https://api.dataforseo.com";
 const DFS_SERP_ENDPOINT = "/v3/serp/google/organic/live/advanced";
 const DFS_MAPS_ENDPOINT = "/v3/serp/google/maps/live/advanced";
 const SERPER_ENDPOINT = "https://google.serper.dev/search";
+const SERPER_PLACES_ENDPOINT = "https://google.serper.dev/places";
 const REQUEST_TIMEOUT_MS = 25_000;
 
 export interface GoogleBusinessProfile {
@@ -358,6 +359,89 @@ function parseGbpFromSerper(resp: SerperResponse): GoogleBusinessProfile | null 
   };
 }
 
+interface SerperPlace {
+  position?: number;
+  title?: string;
+  rating?: number;
+  ratingCount?: number;
+  category?: string;
+  type?: string;
+  types?: string[];
+  address?: string;
+  phoneNumber?: string;
+  website?: string;
+  openingHours?: Record<string, string>;
+  cid?: string;
+  placeId?: string;
+}
+
+interface SerperPlacesResponse {
+  places?: SerperPlace[];
+}
+
+/**
+ * Serper.dev Places / Maps endpoint. This is where small-business GBPs surface
+ * (the default /search endpoint often does NOT return a knowledge graph for
+ * niche local businesses). Returns the best-matching place as a
+ * GoogleBusinessProfile, or null when no match found.
+ *
+ * Match strategy: case-insensitive normalized title contains business name.
+ * If multiple matches, prefer the one with the most ratingCount.
+ */
+async function serperPlacesQuery(query: string, businessName: string): Promise<GoogleBusinessProfile | null> {
+  if (!isSerperEnabled()) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(SERPER_PLACES_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": process.env.SERPER_API_KEY!.trim(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ q: query, num: 10 }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[live-validation] Serper Places returned ${res.status} for "${query}"`);
+      return null;
+    }
+    const json: SerperPlacesResponse = await res.json();
+    const places = json?.places || [];
+    if (places.length === 0) {
+      console.log(`[live-validation] Serper Places returned 0 places for "${query}"`);
+      return null;
+    }
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const bn = norm(businessName);
+    const matches = places.filter((p) => {
+      const title = p?.title || "";
+      return typeof title === "string" && norm(title).includes(bn);
+    });
+    const candidates = matches.length > 0 ? matches : places.slice(0, 1);
+    const best = candidates.sort((a, b) => (b.ratingCount ?? 0) - (a.ratingCount ?? 0))[0];
+    if (!best) return null;
+    console.log(
+      `[live-validation] Serper Places best match: "${best.title}" rating=${best.rating} reviews=${best.ratingCount}`,
+    );
+    return {
+      present: true,
+      rating: typeof best.rating === "number" ? best.rating : null,
+      reviewCount: typeof best.ratingCount === "number" ? best.ratingCount : null,
+      phone: best.phoneNumber || null,
+      address: best.address || null,
+      hours: null,
+      reviewsUrl: null,
+      source: "serper",
+    };
+  } catch (err: any) {
+    console.warn(`[live-validation] Serper Places failed for "${query}":`, err?.message || err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ---------------------- Social presence ---------------------- */
 
 const SOCIAL_DOMAINS: Record<SocialPresenceCheck["platform"], RegExp[]> = {
@@ -423,9 +507,10 @@ export async function validateBusinessLive(input: ValidateInput): Promise<LiveVa
   let allItems: { url?: string; link?: string }[] = [];
 
   // 1a) DataForSEO Google Maps lookup - the most reliable source of GBP review
-  // count. The Maps SERP returns local-pack results with rating + votes_count
-  // even when the knowledge_graph item is just the website (no review fields).
-  // Try address-first if we have one (very disambiguating), else name + city.
+  // count when the DFS plan includes SERP/Maps. The Maps SERP returns
+  // local-pack results with rating + votes_count even when the knowledge_graph
+  // item is just the website. Try address-first if we have one (very
+  // disambiguating), else name + city.
   const mapsQuery = input.address
     ? `${businessName} ${input.address}`
     : locationParts
@@ -436,6 +521,22 @@ export async function validateBusinessLive(input: ValidateInput): Promise<LiveVa
     gbp = mapsGbp;
     provider = "dataforseo";
     console.log(`[live-validation] Maps hit: rating=${mapsGbp.rating} reviews=${mapsGbp.reviewCount}`);
+  }
+
+  // 1a-bis) Serper Places fallback for GBP. This is the workhorse for small
+  // local businesses: Serper's /search endpoint often has no knowledge graph
+  // for niche LLCs, but /places consistently returns the Google Maps panel
+  // with rating, ratingCount, phone, etc. Fires whenever DFS Maps didn't hit
+  // (which includes the 401 case when the DFS plan has no SERP access).
+  if (!gbp.present && isSerperEnabled()) {
+    const placesGbp = await serperPlacesQuery(mapsQuery, businessName);
+    if (placesGbp) {
+      gbp = placesGbp;
+      provider = "serper";
+      console.log(
+        `[live-validation] Serper Places hit: rating=${placesGbp.rating} reviews=${placesGbp.reviewCount}`,
+      );
+    }
   }
 
   // 1b) DataForSEO organic SERP - used for social discovery and as a knowledge
@@ -509,7 +610,7 @@ export async function validateBusinessLive(input: ValidateInput): Promise<LiveVa
     gbp,
     social,
     discrepancies: [],
-    provider: provider === "none" && ok ? "dataforseo" : provider,
+    provider,
     ok,
   };
   console.log("[live-validation] result:", {
