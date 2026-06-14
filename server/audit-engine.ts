@@ -157,6 +157,7 @@ export interface IntakeData {
 }
 
 import { firstNameOf } from "./lib/names";
+import { enrichKeywords, isGoogleAdsEnabled, type GeoCascade } from "./dataforseo-google-ads";
 
 export async function extractIntake(pdfText: string): Promise<IntakeData> {
   if (!pdfText) return {};
@@ -274,6 +275,111 @@ Return only JSON.`;
   return extractJson<VendastaData>(txt, {});
 }
 
+/* -------------------- Local-keyword opportunity (DataForSEO Google Ads) -------------------- */
+
+/**
+ * Generate 8–10 candidate local-SEO opportunity keywords for the client's
+ * industry + city using the LLM, then enrich each with real Google Ads search
+ * volume / CPC / competition via the DataForSEO geo cascade.
+ *
+ * Returns a KeywordRow[] ready to plug into seoDeep.opportunityKeywords.
+ * Falls back to LLM-only rows (no DataForSEO metrics) if creds are missing
+ * or the API fails.
+ */
+async function buildLocalOpportunityKeywords(
+  intake: IntakeData,
+  vendasta: VendastaData,
+): Promise<KeywordRow[]> {
+  const industry = (intake.industry || "local business").trim();
+  const city = (intake.city || intake.location || "").trim();
+  const state = (intake.state || "").trim();
+
+  // 1) Ask the LLM for 8–10 candidate keywords specific to this industry and city.
+  const sys = `You generate local-SEO keyword candidates for small businesses. Output ONLY valid JSON. Never include commentary.`;
+  const usr = `Generate exactly 10 high-value local-SEO opportunity keywords for this business. Return JSON: {"keywords":["...","..."]}.
+
+INDUSTRY: ${industry}
+CITY: ${city || "(unknown)"}
+STATE: ${state || "(unknown)"}
+BUSINESS NAME: ${intake.clientName || "(unknown)"}
+
+Guidelines:
+- 8-10 keywords, all relevant to local search for this industry in this city.
+- Mix of "service" terms ("emergency hvac") and "service + city" terms ("hvac repair frisco").
+- Transactional / commercial intent preferred over informational.
+- 2-5 words each. Lowercase. No quotes, no punctuation.
+- Do NOT include the business name itself.
+- Do NOT include broad national terms like "best hvac near me" — stay specific to this city/industry.
+
+Return only JSON.`;
+  let candidates: string[] = [];
+  try {
+    const txt = await chatJSON(sys, usr, 512);
+    const parsed = extractJson<{ keywords?: string[] }>(txt, {});
+    candidates = Array.isArray(parsed.keywords)
+      ? parsed.keywords.map((k) => (typeof k === "string" ? k.trim().toLowerCase() : "")).filter(Boolean).slice(0, 10)
+      : [];
+  } catch (err) {
+    console.warn("[opportunity-keywords] LLM candidate generation failed", err);
+  }
+  if (candidates.length === 0) {
+    // Last-resort: derive a tiny seed list from industry + city.
+    if (industry && city) {
+      candidates = [
+        industry,
+        `${industry} ${city}`,
+        `best ${industry} ${city}`,
+        `${industry} near me`,
+        `affordable ${industry}`,
+      ].map((k) => k.toLowerCase());
+    } else {
+      return []; // nothing to enrich
+    }
+  }
+
+  // 2) Enrich with DataForSEO Google Ads search volume cascade.
+  if (!isGoogleAdsEnabled()) {
+    // No creds: return LLM-only rows so the report still has SOMETHING. Mark geo as "none".
+    return candidates.map((kw) => ({
+      keyword: kw,
+      volume: undefined,
+      cpc: undefined,
+      competition: undefined,
+      geoLayer: "none" as const,
+      volumeGeo: "",
+      intent: "commercial",
+    }));
+  }
+
+  const cascade: GeoCascade = {
+    city: intake.city || undefined,
+    state: intake.state || undefined,
+    adjacentCity: intake.surroundingCities?.[0],
+    metroArea: intake.metroArea || undefined,
+    surroundingCities: intake.surroundingCities,
+  };
+  try {
+    const enriched = await enrichKeywords(candidates, cascade, { threshold: 20 });
+    return enriched.map((e) => ({
+      keyword: e.keyword,
+      volume: e.metrics.sv ?? undefined,
+      cpc: e.metrics.cpc ?? undefined,
+      competition: e.metrics.comp ?? undefined,
+      geoLayer: e.metrics.geo_layer,
+      volumeGeo: e.volumeGeo,
+      intent: "commercial",
+    }));
+  } catch (err) {
+    console.warn("[opportunity-keywords] DataForSEO enrichment failed", err);
+    return candidates.map((kw) => ({
+      keyword: kw,
+      geoLayer: "none" as const,
+      volumeGeo: "",
+      intent: "commercial",
+    }));
+  }
+}
+
 /* -------------------- Report generation -------------------- */
 
 export async function generateReport(opts: {
@@ -384,6 +490,10 @@ REQUIREMENTS:
 
 Return ONLY the JSON object.`;
 
+  // Kick off the DataForSEO-backed local opportunity keywords in parallel with the
+  // main report generation. Whichever finishes first waits for the other.
+  const opportunityKeywordsPromise = buildLocalOpportunityKeywords(intake, vendasta);
+
   const txt = await chatJSON(sys, usr, 16000);
   const parsed = extractJson<ReportData & { overallGrade: Grade; overallScore: number }>(
     txt,
@@ -420,6 +530,21 @@ Return ONLY the JSON object.`;
   }
   if (!parsed.overallGrade) parsed.overallGrade = "C" as Grade;
   if (typeof parsed.overallScore !== "number") parsed.overallScore = 70;
+
+  // Hard-override opportunityKeywords with the DataForSEO-enriched local list,
+  // so the report shows real Google Ads volume / CPC / competition + geo layer
+  // instead of the model's guesses. If the enrichment returned nothing usable,
+  // we leave the model's guesses in place.
+  try {
+    const localKws = await opportunityKeywordsPromise;
+    if (localKws.length > 0) {
+      parsed.seoDeep = parsed.seoDeep || ({} as ReportData["seoDeep"]);
+      parsed.seoDeep.opportunityKeywords = localKws;
+    }
+  } catch (err) {
+    console.warn("[generateReport] opportunity-keywords promise rejected", err);
+  }
+
   // Server-side safety net: strip em-dashes / en-dashes from every string field.
   // The model is instructed not to use them, but this guarantees clean output.
   return stripDashes(parsed);

@@ -927,6 +927,10 @@ function KeywordTable({
   showPosition?: boolean;
   accent?: boolean;
 }) {
+  // Show the "Volume Geo" column only when at least one row has a geo label.
+  // (The DataForSEO-enriched opportunity keywords carry volumeGeo; the AI-
+  // generated ranking keywords do not.)
+  const showGeo = rows.some((r) => !!r.volumeGeo);
   return (
     <div className="mt-6">
       <div className="mb-2">
@@ -940,6 +944,7 @@ function KeywordTable({
               <th className="px-3 py-2 font-semibold">Keyword</th>
               {showPosition && <th className="px-3 py-2 font-semibold tabular-nums">Pos</th>}
               <th className="px-3 py-2 font-semibold tabular-nums">Volume</th>
+              {showGeo && <th className="px-3 py-2 font-semibold">Volume Geo</th>}
               <th className="px-3 py-2 font-semibold tabular-nums">Difficulty</th>
               <th className="px-3 py-2 font-semibold tabular-nums">CPC</th>
               <th className="px-3 py-2 font-semibold">Intent</th>
@@ -951,6 +956,9 @@ function KeywordTable({
                 <td className="px-3 py-2 font-medium">{r.keyword}</td>
                 {showPosition && <td className="px-3 py-2 tabular-nums">{r.position ?? "N/A"}</td>}
                 <td className="px-3 py-2 tabular-nums">{formatNumber(r.volume)}</td>
+                {showGeo && (
+                  <td className="px-3 py-2 text-xs text-muted-foreground">{r.volumeGeo || "\u2014"}</td>
+                )}
                 <td className="px-3 py-2 tabular-nums">{r.difficulty != null ? Math.round(r.difficulty) : "N/A"}</td>
                 <td className="px-3 py-2 tabular-nums">{formatCurrency(r.cpc)}</td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">{r.intent || "N/A"}</td>
