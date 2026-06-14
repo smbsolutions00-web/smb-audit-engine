@@ -68,31 +68,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     };
     if (!key) return res.json({ ...info, error: "MANUS_API_KEY not set" });
     type Try = { name: string; method: string; url: string; headers: Record<string, string>; body?: string };
+    const H = { "x-manus-api-key": key, Accept: "application/json", "Content-Type": "application/json" };
     const tries: Try[] = [
-      // 1) v2 with x-manus-api-key (per current docs)
-      { name: "v2-me-xManusKey", method: "GET", url: "https://api.manus.ai/v2/me", headers: { "x-manus-api-key": key, Accept: "application/json" } },
-      { name: "v2-tasks-list-xManusKey", method: "GET", url: "https://api.manus.ai/v2/tasks?limit=1", headers: { "x-manus-api-key": key, Accept: "application/json" } },
-      // 2) v2 with Bearer for comparison
-      { name: "v2-tasks-list-Bearer", method: "GET", url: "https://api.manus.ai/v2/tasks?limit=1", headers: { Authorization: `Bearer ${key}`, Accept: "application/json" } },
-      // 3) v2 minimal POST task with x-manus-api-key (no template; just see what shape it wants)
+      // Discover real path roots. Manus told us /v2/* is 404 but accepted our key,
+      // so try the next likely path families. We hit GET endpoints first so a
+      // 404 vs 401 vs 405 tells us where the real namespace lives.
+      { name: "root",                method: "GET",  url: "https://api.manus.ai/", headers: H },
+      { name: "v1",                  method: "GET",  url: "https://api.manus.ai/v1", headers: H },
+      { name: "v2",                  method: "GET",  url: "https://api.manus.ai/v2", headers: H },
+      { name: "openapi",             method: "GET",  url: "https://api.manus.ai/openapi.json", headers: H },
+      { name: "swagger",             method: "GET",  url: "https://api.manus.ai/swagger.json", headers: H },
+      { name: "v1-templates",        method: "GET",  url: "https://api.manus.ai/v1/templates", headers: H },
+      { name: "v1-template-by-uid",  method: "GET",  url: "https://api.manus.ai/v1/templates/whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", headers: H },
+      { name: "v1-renders",          method: "GET",  url: "https://api.manus.ai/v1/renders", headers: H },
+      { name: "v1-images",           method: "GET",  url: "https://api.manus.ai/v1/images", headers: H },
+      { name: "v1-generations",      method: "GET",  url: "https://api.manus.ai/v1/generations", headers: H },
+      { name: "v1-jobs",             method: "GET",  url: "https://api.manus.ai/v1/jobs", headers: H },
+      { name: "v1-runs",             method: "GET",  url: "https://api.manus.ai/v1/runs", headers: H },
+      { name: "v1-slides",           method: "GET",  url: "https://api.manus.ai/v1/slides", headers: H },
+      { name: "v1-decks",            method: "GET",  url: "https://api.manus.ai/v1/decks", headers: H },
+      { name: "v1-image-tasks",      method: "GET",  url: "https://api.manus.ai/v1/image-tasks", headers: H },
+      { name: "v1-image-generations", method: "GET", url: "https://api.manus.ai/v1/image-generations", headers: H },
+      // POST a template-render-shaped body to a few likely paths to see which one accepts the shape.
       {
-        name: "v2-tasks-post-empty",
+        name: "POST v1-renders template",
         method: "POST",
-        url: "https://api.manus.ai/v2/tasks",
-        headers: { "x-manus-api-key": key, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({}),
+        url: "https://api.manus.ai/v1/renders",
+        headers: H,
+        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
       },
-      // 4) v2 POST with template_uid + nano-banana model
       {
-        name: "v2-tasks-post-template",
+        name: "POST v1-images template",
         method: "POST",
-        url: "https://api.manus.ai/v2/tasks",
-        headers: { "x-manus-api-key": key, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08",
-          model: "nano-banana",
-          inputs: { prompt: "ping" },
-        }),
+        url: "https://api.manus.ai/v1/images",
+        headers: H,
+        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
+      },
+      {
+        name: "POST v1-image-tasks template",
+        method: "POST",
+        url: "https://api.manus.ai/v1/image-tasks",
+        headers: H,
+        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
       },
     ];
     const results: any[] = [];
