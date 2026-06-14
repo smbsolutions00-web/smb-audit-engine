@@ -56,6 +56,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  /* Temporary Manus auth probe. Tells us the exact key prefix the server sees,
+     plus what Manus says when we hit a few candidate endpoints. */
+  app.get("/api/debug/manus-ping", async (_req, res) => {
+    const raw = process.env.MANUS_API_KEY || "";
+    const key = raw.trim().replace(/^\uFEFF/, "");
+    const info: any = {
+      keyPresent: !!key,
+      keyLength: key.length,
+      keyPrefix: key.slice(0, 7),
+      keySuffix: key.length > 4 ? key.slice(-4) : "",
+      dotSegments: key.split(".").length, // 3 = JWT, 1 = opaque token
+    };
+    if (!key) return res.json({ ...info, error: "MANUS_API_KEY not set" });
+    const tries: { host: string; path: string; scheme: string }[] = [
+      { host: "api.manus.ai", path: "/v1/me", scheme: "Bearer" },
+      { host: "api.manus.ai", path: "/v1/tasks?limit=1", scheme: "Bearer" },
+      { host: "api.manus.im", path: "/v1/me", scheme: "Bearer" },
+      { host: "api.manus.im", path: "/v1/tasks?limit=1", scheme: "Bearer" },
+    ];
+    const results: any[] = [];
+    for (const t of tries) {
+      try {
+        const r = await fetch(`https://${t.host}${t.path}`, {
+          headers: { Authorization: `${t.scheme} ${key}`, Accept: "application/json" },
+        });
+        const text = await r.text();
+        results.push({
+          host: t.host,
+          path: t.path,
+          status: r.status,
+          bodySnippet: text.slice(0, 240),
+        });
+      } catch (err: any) {
+        results.push({ host: t.host, path: t.path, error: err?.message || String(err) });
+      }
+    }
+    res.json({ ...info, results });
+  });
+
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
   registerAuthRoutes(app);
 
@@ -64,6 +103,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", (req, res, next) => {
     const publicPaths = new Set([
       "/health",
+      "/debug/manus-ping",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
