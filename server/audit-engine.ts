@@ -439,15 +439,60 @@ Return only JSON.`;
     }));
   }
 
+  // If the intake was created before geo enrichment was added (older audits),
+  // metroArea / surroundingCities will be missing. Do an on-the-fly enrichment
+  // so reruns of old audits still get a proper geo cascade.
+  let metroArea = intake.metroArea;
+  let surroundingCities = intake.surroundingCities;
+  if ((!metroArea || !surroundingCities?.length) && (intake.city || intake.state)) {
+    try {
+      const geo = await enrichIntakeGeo({
+        city: intake.city,
+        state: intake.state,
+        location: intake.location,
+      });
+      if (geo.metroArea && !metroArea) metroArea = geo.metroArea;
+      if (geo.surroundingCities && !surroundingCities?.length) {
+        surroundingCities = geo.surroundingCities;
+      }
+      console.log(
+        `[opportunity-keywords] on-the-fly geo enrichment: metro=${metroArea} surrounding=${(surroundingCities || []).join(", ")}`,
+      );
+    } catch (err) {
+      console.warn("[opportunity-keywords] on-the-fly geo enrichment failed", err);
+    }
+  }
+
   const cascade: GeoCascade = {
     city: intake.city || undefined,
     state: intake.state || undefined,
-    adjacentCity: intake.surroundingCities?.[0],
-    metroArea: intake.metroArea || undefined,
-    surroundingCities: intake.surroundingCities,
+    adjacentCity: surroundingCities?.[0],
+    metroArea: metroArea || undefined,
+    surroundingCities,
   };
+  console.log(
+    `[opportunity-keywords] candidates=${candidates.length} cascade=${JSON.stringify({
+      city: cascade.city,
+      state: cascade.state,
+      metro: cascade.metroArea,
+      surrounding: cascade.surroundingCities || [],
+    })}`,
+  );
   try {
-    const enriched = await enrichKeywords(candidates, cascade, { threshold: 20 });
+    // acceptAnyNonNull: trust the first non-null result from DataForSEO at any
+    // geo layer. Without this, low-volume local terms (1-19 searches/mo) get
+    // dropped as "not usable" and the report ends up with N/A everywhere.
+    // threshold: 0 means even "sv === 0" counts so the cascade can escalate
+    // to a broader geo and find a real number.
+    const enriched = await enrichKeywords(candidates, cascade, {
+      threshold: 0,
+      acceptAnyNonNull: true,
+    });
+    const hits = enriched.filter((e) => (e.metrics.sv ?? null) !== null).length;
+    console.log(
+      `[opportunity-keywords] enrichment hits=${hits}/${enriched.length} ` +
+        `layers=${enriched.map((e) => e.metrics.geo_layer).join(",")}`,
+    );
     return enriched.map((e) => ({
       keyword: e.keyword,
       volume: e.metrics.sv ?? undefined,
