@@ -56,6 +56,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  /* Temporary public debug endpoint for live Google validation. Lets us
+     inspect exactly what DataForSEO Maps + organic returns for a given
+     business so we can diagnose hallucinated reputation sections. */
+  app.get("/api/debug/validate", async (req, res) => {
+    try {
+      const { validateBusinessLive } = await import("./live-google-validation");
+      const businessName = String(req.query.name || "").trim();
+      if (!businessName) return res.status(400).json({ error: "missing ?name=" });
+      const result = await validateBusinessLive({
+        businessName,
+        city: req.query.city ? String(req.query.city) : undefined,
+        state: req.query.state ? String(req.query.state) : undefined,
+        address: req.query.address ? String(req.query.address) : undefined,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
+  });
+
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
   registerAuthRoutes(app);
 
@@ -64,6 +84,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", (req, res, next) => {
     const publicPaths = new Set([
       "/health",
+      "/debug/validate",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
