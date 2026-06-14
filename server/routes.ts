@@ -80,11 +80,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
      populated for a given business. */
   app.get("/api/debug/serper-raw", async (req, res) => {
     const q = String(req.query.q || "").trim();
+    const ep = String(req.query.ep || "search"); // search | places | maps
     if (!q) return res.status(400).json({ error: "missing ?q=" });
     const key = (process.env.SERPER_API_KEY || "").trim();
     if (!key) return res.status(500).json({ error: "no SERPER_API_KEY in env" });
+    const url =
+      ep === "places"
+        ? "https://google.serper.dev/places"
+        : ep === "maps"
+          ? "https://google.serper.dev/maps"
+          : "https://google.serper.dev/search";
     try {
-      const r = await fetch("https://google.serper.dev/search", {
+      const r = await fetch(url, {
         method: "POST",
         headers: { "X-API-KEY": key, "Content-Type": "application/json" },
         body: JSON.stringify({ q, num: 10 }),
@@ -92,6 +99,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const status = r.status;
       const json: any = await r.json().catch(() => ({}));
       res.json({
+        endpoint: ep,
         httpStatus: status,
         hasKnowledgeGraph: !!json?.knowledgeGraph,
         knowledgeGraph: json?.knowledgeGraph || null,
