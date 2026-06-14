@@ -90,6 +90,57 @@ export async function getManusState(auditId: string): Promise<ManusExportState |
   return readState(audit);
 }
 
+interface TaskDetail {
+  ok: boolean;
+  task?: { id: string; status: string; task_url?: string };
+}
+
+/**
+ * On-demand reconciliation: if our local state says a task is still
+ * queued/running but the in-process background poller is gone (e.g. the
+ * server was restarted by a Render redeploy), ask Manus directly for the
+ * current task status and collect deliverables if it is actually done.
+ *
+ * Called from /api/audits/:id/manus-status. Safe to call repeatedly; if
+ * Manus is still running we just refresh updatedAt as a heartbeat.
+ */
+export async function reconcileManusState(auditId: string): Promise<ManusExportState | null> {
+  const audit = await storage.getAudit(auditId);
+  if (!audit) return null;
+  const state = readState(audit);
+  if (!state || !state.taskId) return state;
+  // Only reconcile while we still think Manus is working.
+  if (state.status !== "queued" && state.status !== "running") return state;
+
+  try {
+    const r = await fetch(
+      `${MANUS_BASE}/v2/task.detail?task_id=${encodeURIComponent(state.taskId)}`,
+      { headers: manusHeaders() },
+    );
+    const j = (await r.json()) as TaskDetail;
+    const remoteStatus = j?.task?.status || "";
+    if (remoteStatus === "stopped" || remoteStatus === "completed" || remoteStatus === "succeeded") {
+      try {
+        await collectDeliverables(auditId, state.taskId);
+      } catch (err: any) {
+        await writeState(auditId, { status: "failed", error: err?.message || String(err) });
+        await storage.appendEvent(auditId, "manus_deck_failed", { error: err?.message });
+      }
+    } else if (remoteStatus === "failed" || remoteStatus === "error" || remoteStatus === "cancelled") {
+      await writeState(auditId, { status: "failed", error: `Manus task ended with status: ${remoteStatus}` });
+      await storage.appendEvent(auditId, "manus_deck_failed", { error: remoteStatus });
+    } else {
+      // Still running. Heartbeat updatedAt so the UI knows the row is live.
+      await writeState(auditId, { status: "running" });
+    }
+  } catch (err) {
+    console.error(`[manus] reconcile failed for ${auditId}:`, err);
+    // Don't flip status on transient errors; just leave state as-is.
+  }
+
+  return getManusState(auditId);
+}
+
 function deckDir(auditId: string) {
   const d = join(DECK_ROOT, auditId);
   mkdirSync(d, { recursive: true });
@@ -240,11 +291,6 @@ export async function startManusDeck(
   return { taskId: json.task_id, taskUrl: json.task_url };
 }
 
-interface TaskDetail {
-  ok: boolean;
-  task?: { id: string; status: string; task_url?: string };
-}
-
 interface ListMessagesResponse {
   ok: boolean;
   has_more?: boolean;
@@ -260,6 +306,10 @@ interface ListMessagesResponse {
       }>;
     };
   }>;
+}
+
+export function deckPdfFilePath(auditId: string): string {
+  return join(deckDir(auditId), "slides.pdf");
 }
 
 async function pollAndCollect(auditId: string, taskId: string): Promise<void> {

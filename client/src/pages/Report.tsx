@@ -2853,11 +2853,49 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
   const isFailed = state.status === "failed";
 
   function elapsedLabel(): string {
-    if (!state.startedAt) return "";
+    if (!state.startedAt) return "under a minute";
     const ms = Date.now() - state.startedAt;
     const m = Math.floor(ms / 60000);
     const s = Math.floor((ms % 60000) / 1000);
+    if (m === 0) return `${s}s`;
     return `${m}m ${s.toString().padStart(2, "0")}s`;
+  }
+
+  function formatStamp(ms?: number): string {
+    if (!ms) return "";
+    const d = new Date(ms);
+    const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return `${date} at ${time}`;
+  }
+
+  // Trigger ElevenLabs script generation directly from the deck-complete card
+  // (uses the just-built Manus deck PDF as the source, no manual re-upload).
+  const [scriptBusy, setScriptBusy] = useState(false);
+  async function handleGenerateScript() {
+    setScriptBusy(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/audits/${auditId}/elevenlabs-script?format=json&regenerate=1`,
+        { credentials: "include" },
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
+      toast({
+        title: "ElevenLabs script generated",
+        description: `${(json.script || "").length.toLocaleString()} characters ready. Open the final deliverable section to view, edit, or download.`,
+      });
+      // Refresh the audit query so the timeline picks up the new event.
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+    } catch (err: any) {
+      toast({
+        title: "Could not generate the script",
+        description: err?.message || "Unknown error.",
+        variant: "destructive",
+      });
+    } finally {
+      setScriptBusy(false);
+    }
   }
 
   return (
@@ -2940,7 +2978,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
               <div className="min-w-0">
                 <div className="text-sm font-medium">Manus is generating slides</div>
                 <div className="text-xs text-muted-foreground">
-                  Elapsed {elapsedLabel()}. Image-mode decks usually take five to fifteen minutes.
+                  Started {formatStamp(state.startedAt)}. Elapsed: {elapsedLabel()}. Image-mode decks usually take five to fifteen minutes.
                 </div>
               </div>
             </div>
@@ -2971,7 +3009,9 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                     Deck ready ({state.slideCount ?? "?"} slides)
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Download the slide images or the assembled PDF.
+                    {state.completedAt
+                      ? `Generated ${formatStamp(state.completedAt)}`
+                      : "Download the slide images or the assembled PDF."}
                   </div>
                 </div>
               </div>
@@ -2997,6 +3037,35 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                   </Button>
                 )}
               </div>
+            </div>
+            {/* One-click ElevenLabs script generation from the deck PDF.
+                Skips the manual upload step in the Final Deliverable section. */}
+            <div className="mt-1 flex flex-col gap-2 border-t border-emerald-500/20 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Next: ElevenLabs DJ #2 script</div>
+                <div className="text-xs text-muted-foreground">
+                  Generate the narration script straight from this deck PDF. You can review and edit it in the Final Deliverable section below.
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleGenerateScript}
+                disabled={scriptBusy || !state.hasPdf}
+                data-testid="button-generate-elevenlabs-from-deck"
+              >
+                {scriptBusy ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-1.5 h-4 w-4" />
+                    Generate ElevenLabs Script
+                  </>
+                )}
+              </Button>
             </div>
             {state.taskUrl && (
               <a
