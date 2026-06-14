@@ -44,7 +44,7 @@ const ENDPOINT = "/v3/keywords_data/google_ads/search_volume/live";
 const REQUEST_TIMEOUT_MS = 30_000;
 const LOW_VOLUME_THRESHOLD_DEFAULT = 20; // escalate if volume is null or below this
 
-export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "none";
+export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "national" | "estimated" | "none";
 
 export interface KeywordMetrics {
   sv: number | null;
@@ -163,6 +163,10 @@ async function fetchVolumesAt(
     for (const r of rows) {
       if (r?.keyword) out.set(r.keyword.toLowerCase(), r);
     }
+    const withVolume = rows.filter((r) => (r?.search_volume ?? null) !== null).length;
+    console.log(
+      `[google-ads] ${locationName}: sent=${dedup.length} got=${rows.length} withVolume=${withVolume}`,
+    );
     return out;
   } catch (err: any) {
     clearTimeout(timeout);
@@ -340,6 +344,28 @@ export async function enrichKeywords(
     keywordsAt: (kws) => kws.map((k) => stripGeoTail(k, cascade)),
   });
 
+  // Final guaranteed national fallback: query the ORIGINAL keyword (no
+  // stripping) at the United States level. This catches cases where the root
+  // phrase still returned null at metro/state (which happens with very narrow
+  // local terms) so we still hand the user SOMETHING rather than N/A. Always
+  // included regardless of cascade contents.
+  layers.push({
+    label: "national",
+    locationName: "United States",
+    geoHuman: "United States",
+    keywordsAt: (kws) => kws,
+  });
+
+  // Also queue a stripped-national layer to catch long-tail variations whose
+  // root phrase is well-known at national scale (e.g. "weight loss supplements
+  // flower mound" -> "weight loss supplements" at US level).
+  layers.push({
+    label: "national",
+    locationName: "United States",
+    geoHuman: "United States (root)",
+    keywordsAt: (kws) => kws.map((k) => stripGeoTail(k, cascade)),
+  });
+
   // Track which originals still need a usable result. Map from lowercase
   // keyword -> the current best result (with metrics + geoHuman).
   const settled = new Map<string, KeywordEnrichmentResult>();
@@ -348,10 +374,12 @@ export async function enrichKeywords(
   for (const layer of layers) {
     if (pending.length === 0) break;
     const sendKeywords = layer.keywordsAt(pending);
-    // For root-phrase we may have mapped originals -> stripped versions; build
-    // a map from stripped-lc -> array of originals so we can apply results.
+    // A layer may map originals -> stripped/rephrased versions; detect that by
+    // checking whether sendKeywords differs from pending. If so, build a map
+    // from stripped-lc -> array of originals so we can apply results back.
+    const isStrippedLayer = sendKeywords.some((s, i) => s !== pending[i]);
     const strippedToOriginals = new Map<string, string[]>();
-    if (layer.label === "root") {
+    if (isStrippedLayer) {
       pending.forEach((orig, i) => {
         const stripped = sendKeywords[i] || orig;
         const k = stripped.toLowerCase();
@@ -362,7 +390,7 @@ export async function enrichKeywords(
     }
     const results = await fetchVolumesAt(sendKeywords, layer.locationName, languageCode);
 
-    if (layer.label === "root") {
+    if (isStrippedLayer) {
       // Apply stripped results back to their original keywords.
       for (const [strippedLc, originals] of strippedToOriginals.entries()) {
         const r = results.get(strippedLc);
@@ -377,7 +405,7 @@ export async function enrichKeywords(
               sv: r.search_volume ?? null,
               cpc: r.cpc ?? null,
               comp: r.competition ?? null,
-              geo_layer: "root",
+              geo_layer: layer.label,
             },
             volumeGeo: layer.geoHuman,
           });

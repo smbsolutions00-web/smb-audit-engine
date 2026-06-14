@@ -493,24 +493,135 @@ Return only JSON.`;
       `[opportunity-keywords] enrichment hits=${hits}/${enriched.length} ` +
         `layers=${enriched.map((e) => e.metrics.geo_layer).join(",")}`,
     );
-    return enriched.map((e) => ({
-      keyword: e.keyword,
-      volume: e.metrics.sv ?? undefined,
-      cpc: e.metrics.cpc ?? undefined,
-      competition: e.metrics.comp ?? undefined,
-      geoLayer: e.metrics.geo_layer,
-      volumeGeo: e.volumeGeo,
-      intent: "commercial",
-    }));
+
+    // LLM-estimated fallback: for any keyword that DataForSEO returned null on
+    // across every geo layer, ask the LLM to estimate realistic volume / cpc /
+    // difficulty so the report never shows all N/A. Estimates are marked with
+    // geoLayer = "estimated" so the front end / narration knows the provenance.
+    const stillNull = enriched
+      .filter((e) => (e.metrics.sv ?? null) === null)
+      .map((e) => e.keyword);
+    const estimates = stillNull.length > 0
+      ? await estimateKeywordMetricsLLM(stillNull, { industry, city, state })
+      : new Map<string, { volume: number; cpc: number; difficulty: number }>();
+    if (estimates.size > 0) {
+      console.log(
+        `[opportunity-keywords] LLM-estimated fallback applied to ${estimates.size}/${stillNull.length} null keywords`,
+      );
+    }
+
+    return enriched.map((e) => {
+      const live = (e.metrics.sv ?? null) !== null;
+      if (live) {
+        return {
+          keyword: e.keyword,
+          volume: e.metrics.sv ?? undefined,
+          cpc: e.metrics.cpc ?? undefined,
+          competition: e.metrics.comp ?? undefined,
+          geoLayer: e.metrics.geo_layer,
+          volumeGeo: e.volumeGeo,
+          intent: "commercial",
+        };
+      }
+      const est = estimates.get(e.keyword.toLowerCase());
+      if (est) {
+        return {
+          keyword: e.keyword,
+          volume: est.volume,
+          cpc: est.cpc,
+          difficulty: est.difficulty,
+          competition: undefined,
+          geoLayer: "estimated" as const,
+          volumeGeo: "Estimated (local industry baseline)",
+          intent: "commercial",
+        } as KeywordRow;
+      }
+      return {
+        keyword: e.keyword,
+        volume: undefined,
+        cpc: undefined,
+        competition: undefined,
+        geoLayer: "none" as const,
+        volumeGeo: "",
+        intent: "commercial",
+      };
+    });
   } catch (err) {
     console.warn("[opportunity-keywords] DataForSEO enrichment failed", err);
-    return candidates.map((kw) => ({
-      keyword: kw,
-      geoLayer: "none" as const,
-      volumeGeo: "",
-      intent: "commercial",
-    }));
+    // Even when the cascade throws, try to give the user LLM estimates so the
+    // table is not entirely N/A.
+    const estimates = await estimateKeywordMetricsLLM(candidates, { industry, city, state }).catch(() => new Map());
+    return candidates.map((kw) => {
+      const est = estimates.get(kw.toLowerCase());
+      if (est) {
+        return {
+          keyword: kw,
+          volume: est.volume,
+          cpc: est.cpc,
+          difficulty: est.difficulty,
+          geoLayer: "estimated" as const,
+          volumeGeo: "Estimated (local industry baseline)",
+          intent: "commercial",
+        } as KeywordRow;
+      }
+      return {
+        keyword: kw,
+        geoLayer: "none" as const,
+        volumeGeo: "",
+        intent: "commercial",
+      };
+    });
   }
+}
+
+/**
+ * LLM-estimated keyword metrics fallback. Used only when DataForSEO returns
+ * null across every geo layer for a keyword. Returns conservative, realistic
+ * estimates clearly labelled as estimated in the report. Never invents a brand
+ * keyword volume.
+ */
+async function estimateKeywordMetricsLLM(
+  keywords: string[],
+  ctx: { industry: string; city?: string; state?: string },
+): Promise<Map<string, { volume: number; cpc: number; difficulty: number }>> {
+  const out = new Map<string, { volume: number; cpc: number; difficulty: number }>();
+  if (keywords.length === 0) return out;
+  const sys = `You estimate realistic Google search metrics for long-tail local keywords. Output ONLY valid JSON.`;
+  const usr = `Estimate monthly search volume, average CPC (USD), and keyword difficulty (0-100) for each keyword below in the context of a small local business.
+
+INDUSTRY: ${ctx.industry}
+CITY: ${ctx.city || "(unknown)"}
+STATE: ${ctx.state || "(unknown)"}
+
+KEYWORDS:
+${keywords.map((k) => `- ${k}`).join("\n")}
+
+Guidelines:
+- Volume should reflect a small city / metro audience. Long-tail local terms typically 10-90 searches/month. Be conservative.
+- CPC realistic for the industry (commercial intent usually $0.50 - $4.00).
+- Difficulty: 10-40 for long-tail local, higher only if generic.
+- Round volume to nearest 10. Round CPC to 2 decimals.
+
+Return JSON: {"estimates":[{"keyword":"...","volume":N,"cpc":N.NN,"difficulty":N}, ...]}`;
+  try {
+    const txt = await chatJSON(sys, usr, 1024);
+    const parsed = extractJson<{ estimates?: Array<{ keyword?: string; volume?: number; cpc?: number; difficulty?: number }> }>(txt, {});
+    for (const row of parsed.estimates || []) {
+      if (!row?.keyword) continue;
+      const v = Number(row.volume);
+      const c = Number(row.cpc);
+      const d = Number(row.difficulty);
+      if (!Number.isFinite(v) || !Number.isFinite(c) || !Number.isFinite(d)) continue;
+      out.set(row.keyword.trim().toLowerCase(), {
+        volume: Math.max(0, Math.round(v)),
+        cpc: Math.max(0, Math.round(c * 100) / 100),
+        difficulty: Math.min(100, Math.max(0, Math.round(d))),
+      });
+    }
+  } catch (err) {
+    console.warn("[opportunity-keywords] LLM estimation failed", err);
+  }
+  return out;
 }
 
 /* -------------------- Keyword tier classification -------------------- */
