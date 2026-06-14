@@ -56,8 +56,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  /* Temporary Manus auth probe. Tells us the exact key prefix the server sees,
-     plus what Manus says when we hit a few candidate endpoints. */
+  /* Temporary Manus auth probe. Uses v2 endpoint + x-manus-api-key header. */
   app.get("/api/debug/manus-ping", async (_req, res) => {
     const raw = process.env.MANUS_API_KEY || "";
     const key = raw.trim().replace(/^\uFEFF/, "");
@@ -66,30 +65,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       keyLength: key.length,
       keyPrefix: key.slice(0, 7),
       keySuffix: key.length > 4 ? key.slice(-4) : "",
-      dotSegments: key.split(".").length, // 3 = JWT, 1 = opaque token
     };
     if (!key) return res.json({ ...info, error: "MANUS_API_KEY not set" });
-    const tries: { host: string; path: string; scheme: string }[] = [
-      { host: "api.manus.ai", path: "/v1/me", scheme: "Bearer" },
-      { host: "api.manus.ai", path: "/v1/tasks?limit=1", scheme: "Bearer" },
-      { host: "api.manus.im", path: "/v1/me", scheme: "Bearer" },
-      { host: "api.manus.im", path: "/v1/tasks?limit=1", scheme: "Bearer" },
+    type Try = { name: string; method: string; url: string; headers: Record<string, string>; body?: string };
+    const tries: Try[] = [
+      // 1) v2 with x-manus-api-key (per current docs)
+      { name: "v2-me-xManusKey", method: "GET", url: "https://api.manus.ai/v2/me", headers: { "x-manus-api-key": key, Accept: "application/json" } },
+      { name: "v2-tasks-list-xManusKey", method: "GET", url: "https://api.manus.ai/v2/tasks?limit=1", headers: { "x-manus-api-key": key, Accept: "application/json" } },
+      // 2) v2 with Bearer for comparison
+      { name: "v2-tasks-list-Bearer", method: "GET", url: "https://api.manus.ai/v2/tasks?limit=1", headers: { Authorization: `Bearer ${key}`, Accept: "application/json" } },
+      // 3) v2 minimal POST task with x-manus-api-key (no template; just see what shape it wants)
+      {
+        name: "v2-tasks-post-empty",
+        method: "POST",
+        url: "https://api.manus.ai/v2/tasks",
+        headers: { "x-manus-api-key": key, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({}),
+      },
+      // 4) v2 POST with template_uid + nano-banana model
+      {
+        name: "v2-tasks-post-template",
+        method: "POST",
+        url: "https://api.manus.ai/v2/tasks",
+        headers: { "x-manus-api-key": key, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08",
+          model: "nano-banana",
+          inputs: { prompt: "ping" },
+        }),
+      },
     ];
     const results: any[] = [];
     for (const t of tries) {
       try {
-        const r = await fetch(`https://${t.host}${t.path}`, {
-          headers: { Authorization: `${t.scheme} ${key}`, Accept: "application/json" },
-        });
+        const r = await fetch(t.url, { method: t.method, headers: t.headers, body: t.body });
         const text = await r.text();
-        results.push({
-          host: t.host,
-          path: t.path,
-          status: r.status,
-          bodySnippet: text.slice(0, 240),
-        });
+        results.push({ name: t.name, status: r.status, bodySnippet: text.slice(0, 400) });
       } catch (err: any) {
-        results.push({ host: t.host, path: t.path, error: err?.message || String(err) });
+        results.push({ name: t.name, error: err?.message || String(err) });
       }
     }
     res.json({ ...info, results });
