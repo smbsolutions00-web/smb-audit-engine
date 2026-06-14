@@ -11,6 +11,7 @@ import {
   parseKeysearchCsv,
   extractIntake,
   extractVendasta,
+  enrichIntakeGeo,
   generateReport,
 } from "./audit-engine";
 import type { KeywordRow, ReportData, Grade, InsertAudit } from "@shared/schema";
@@ -70,6 +71,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     ]);
     if (publicPaths.has(req.path)) return next();
     return requireAuth(req, res, next);
+  });
+
+  /* Intake preview — extract intake data from an uploaded PDF WITHOUT creating
+     an audit. Used by NewAudit.tsx to auto-fill the form fields the moment
+     the intake PDF is dropped onto the dropzone. */
+  app.post("/api/intake/preview", upload.single("intake"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "Intake PDF is required." });
+      }
+      const intakeText = await parsePdfBuffer(req.file.buffer);
+      const intake = await extractIntake(intakeText);
+      // Run the geo enrichment in parallel as a best-effort.
+      const geo = await enrichIntakeGeo({
+        city: intake.city,
+        state: intake.state,
+        location: intake.location,
+      });
+      const merged = { ...intake, ...geo };
+      res.json({
+        ownerFirstName: merged.ownerFirstName || null,
+        contactName: merged.contactName || null,
+        clientName: merged.clientName || null,
+        website: merged.website || null,
+        email: merged.email || null,
+        phone: merged.phone || null,
+        address: merged.address || null,
+        location: merged.location || null,
+        city: merged.city || null,
+        state: merged.state || null,
+        metroArea: merged.metroArea || null,
+        surroundingCities: merged.surroundingCities || [],
+        industry: merged.industry || null,
+      });
+    } catch (err: any) {
+      console.error("[intake-preview]", err);
+      res.status(500).json({ message: err?.message || "Failed to preview intake." });
+    }
   });
 
   /* List audits */
@@ -523,7 +562,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const rawScript = await generateElevenLabsScript({
         pdfPath: filePath,
         context: {
-          ownerName: intake.contactName || intake.clientName || audit.clientName,
+          // Prefer the deterministic ownerFirstName captured at intake time so the
+          // narration consistently addresses the right person. Fall back to the full
+          // contactName (the firstNameOf parser will still extract the first name).
+          ownerName: intake.ownerFirstName || intake.contactName || intake.clientName || audit.clientName,
           businessName: audit.clientName || intake.clientName,
           industry: audit.industry ?? undefined,
           location: audit.location ?? undefined,
@@ -595,6 +637,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const keysearchFiles = files?.keysearch || [];
         const website = (req.body.website || "").trim();
         const clientName = (req.body.clientName || "").trim() || "Unnamed Client";
+        const ownerFirstName = (req.body.ownerFirstName || "").trim();
 
         // Auto-fetched Keysearch rows arrive as a JSON string in the multipart body
         // when the user clicked "Auto-fetch from Keysearch" instead of (or alongside)
@@ -636,6 +679,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           prefetchedKeysearchRows: prefetchedRows,
           clientName,
           website,
+          ownerFirstName,
         }).catch(async (err) => {
           console.error("Audit processing error:", err);
           await storage.updateAudit(id, {
@@ -664,6 +708,7 @@ async function processAudit(
     prefetchedKeysearchRows?: KeywordRow[];
     clientName: string;
     website: string;
+    ownerFirstName?: string;
   }
 ) {
   // Step 1: parse PDFs
@@ -691,6 +736,19 @@ async function processAudit(
     extractIntake(intakeText),
     extractVendasta(vendastaText),
   ]);
+
+  // Step 3b: enrich geo (metro anchor + 3 surrounding cities) for the
+  // DataForSEO local-keyword cascade. Best-effort; failures leave the fields empty.
+  const geo = await enrichIntakeGeo({
+    city: intake.city,
+    state: intake.state,
+    location: intake.location,
+  });
+  intake.metroArea = intake.metroArea || geo.metroArea;
+  intake.surroundingCities = intake.surroundingCities || geo.surroundingCities;
+  // The form's owner-first-name override (if the user manually corrected it) wins
+  // over the deterministic parse from contactName.
+  if (args.ownerFirstName) intake.ownerFirstName = args.ownerFirstName;
 
   await storage.updateAudit(id, {
     intakeData: JSON.stringify(intake),

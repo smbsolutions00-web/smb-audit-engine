@@ -41,7 +41,11 @@ export default function NewAudit() {
   const [keysearch, setKeysearch] = useState<File[]>([]);
   const [website, setWebsite] = useState("");
   const [clientName, setClientName] = useState("");
+  const [ownerFirstName, setOwnerFirstName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Intake auto-fill state — fires the moment a PDF is dropped onto the intake dropzone.
+  const [intakePreviewing, setIntakePreviewing] = useState(false);
 
   // SEO auto-fetch state (DataForSEO)
   const [autofetchAvailable, setAutofetchAvailable] = useState(false);
@@ -57,6 +61,60 @@ export default function NewAudit() {
       .then((d) => setAutofetchAvailable(!!(d?.dataForSEO ?? d?.keysearchAutofetch)))
       .catch(() => setAutofetchAvailable(false));
   }, []);
+
+  /**
+   * The moment the user drops the intake PDF, POST it to /api/intake/preview
+   * and auto-fill the form fields (owner first name, business name, website).
+   * We never overwrite a field the user has already typed into.
+   */
+  useEffect(() => {
+    if (!intake) return;
+    let cancelled = false;
+    (async () => {
+      setIntakePreviewing(true);
+      try {
+        const fd = new FormData();
+        fd.append("intake", intake);
+        const res = await fetch(`${API}/api/intake/preview`, { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          toast({
+            variant: "destructive",
+            title: "Couldn't read intake form",
+            description: data?.message || "Try a different PDF or fill the fields manually.",
+          });
+          return;
+        }
+        // Only fill fields the user hasn't already typed into.
+        if (data.ownerFirstName && !ownerFirstName.trim()) setOwnerFirstName(data.ownerFirstName);
+        if (data.clientName && !clientName.trim()) setClientName(data.clientName);
+        if (data.website && !website.trim()) setWebsite(data.website);
+        toast({
+          title: "Intake auto-filled",
+          description: [
+            data.ownerFirstName && `Owner: ${data.ownerFirstName}`,
+            data.clientName && `Business: ${data.clientName}`,
+            data.metroArea && `Metro: ${data.metroArea}`,
+          ].filter(Boolean).join(" \u00b7 ") || "Form fields populated from the intake PDF.",
+        });
+      } catch (err: any) {
+        if (!cancelled) {
+          toast({
+            variant: "destructive",
+            title: "Intake preview failed",
+            description: err?.message || "Network error reading the intake form.",
+          });
+        }
+      } finally {
+        if (!cancelled) setIntakePreviewing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intake]);
 
   const canSubmit = intake && vendasta && website.trim() && !submitting;
 
@@ -139,6 +197,7 @@ export default function NewAudit() {
       keysearch.forEach((f) => fd.append("keysearch", f));
       fd.append("website", website.trim());
       if (clientName.trim()) fd.append("clientName", clientName.trim());
+      if (ownerFirstName.trim()) fd.append("ownerFirstName", ownerFirstName.trim());
       if (autofetched && autofetched.rows.length > 0) {
         fd.append("keysearchRows", JSON.stringify(autofetched.rows));
       }
@@ -169,9 +228,25 @@ export default function NewAudit() {
       </header>
 
       <Card className="space-y-6 border-card-border p-6">
-        {/* Client name (optional) */}
+        {/* Owner first name */}
         <div className="space-y-2">
-          <Label htmlFor="clientName">Client name <span className="text-muted-foreground">(optional — auto-filled from intake)</span></Label>
+          <Label htmlFor="ownerFirstName">
+            Owner first name <span className="text-muted-foreground">(auto-filled from intake)</span>
+          </Label>
+          <Input
+            id="ownerFirstName"
+            value={ownerFirstName}
+            onChange={(e) => setOwnerFirstName(e.target.value)}
+            placeholder="e.g. Tawana"
+            data-testid="input-owner-first-name"
+          />
+        </div>
+
+        {/* Client name */}
+        <div className="space-y-2">
+          <Label htmlFor="clientName">
+            Business name <span className="text-muted-foreground">(auto-filled from intake)</span>
+          </Label>
           <Input
             id="clientName"
             value={clientName}
@@ -183,7 +258,10 @@ export default function NewAudit() {
 
         {/* Website */}
         <div className="space-y-2">
-          <Label htmlFor="website">Client website URL <span className="text-destructive">*</span></Label>
+          <Label htmlFor="website">
+            Client website URL <span className="text-destructive">*</span>{" "}
+            <span className="text-muted-foreground">(auto-filled from intake)</span>
+          </Label>
           <Input
             id="website"
             value={website}

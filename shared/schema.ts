@@ -60,14 +60,19 @@ export interface AiAutomationPillar extends PillarReport {
   platforms: AiPlatformPresence[];
 }
 
+export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "none";
+
 export interface KeywordRow {
   keyword: string;
   position?: number;
   volume?: number;
   difficulty?: number;
   cpc?: number;
+  competition?: number;  // 0..1 Google Ads competition index
   intent?: string;
   url?: string;
+  geoLayer?: GeoLayer;   // Which geo layer produced the displayed volume
+  volumeGeo?: string;    // Human-readable label, e.g. "Frisco, TX" or "Dallas Metro"
 }
 
 export interface ListingRow {

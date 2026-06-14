@@ -138,18 +138,25 @@ async function chatJSON(systemPrompt: string, userPrompt: string, maxTokens = 40
 export interface IntakeData {
   clientName?: string;
   contactName?: string;
+  ownerFirstName?: string;  // Derived deterministically from contactName via firstNameOf()
   email?: string;
   phone?: string;
   website?: string;
   industry?: string;
-  location?: string;       // City/state — brief
-  address?: string;        // Full street address (NAP)
+  location?: string;        // City/state — brief (e.g. "Frisco, TX")
+  address?: string;         // Full street address (NAP)
+  city?: string;            // Parsed local city (e.g. "Frisco")
+  state?: string;           // Parsed state code or name (e.g. "TX" or "Texas")
+  metroArea?: string;       // Dominant metro anchor city (e.g. "Dallas")
+  surroundingCities?: string[];  // 3 nearby cities for local-SEO escalation (e.g. ["Plano", "McKinney", "Allen"])
   businessGoals?: string[];
   painPoints?: string[];
   currentTools?: string[];
   budget?: string;
   rawNotes?: string;
 }
+
+import { firstNameOf } from "./lib/names";
 
 export async function extractIntake(pdfText: string): Promise<IntakeData> {
   if (!pdfText) return {};
@@ -164,6 +171,8 @@ export async function extractIntake(pdfText: string): Promise<IntakeData> {
 - industry: Industry / business category (e.g. "HVAC", "Dental", "Roofing").
 - location: Brief city/state only (e.g. "Methuen, MA").
 - address: FULL street address as a single string — number, street, suite/building/unit, city, state, ZIP. Look for labels like "Business Address", "Mailing Address", "Service Address", "Location", "Street Address". REQUIRED if present anywhere in the document. Do NOT abbreviate; preserve suite/building info.
+- city: Just the city portion of the address (e.g. "Frisco").
+- state: Just the state portion of the address (e.g. "Texas" — spell out the full state name, not the postal code).
 - businessGoals: array of strings
 - painPoints: array of strings
 - currentTools: array of strings
@@ -177,7 +186,62 @@ ${pdfText.slice(0, 18000)}
 
 Return only JSON.`;
   const txt = await chatJSON(sys, usr, 2048);
-  return extractJson<IntakeData>(txt, {});
+  const intake = extractJson<IntakeData>(txt, {});
+  // Deterministically derive owner first name from contactName so the
+  // ElevenLabs narration and downstream skills never have to guess.
+  if (intake.contactName) {
+    intake.ownerFirstName = firstNameOf(intake.contactName);
+  }
+  return intake;
+}
+
+/**
+ * Use a small LLM call to derive the dominant metro anchor and 3 surrounding
+ * cities for a given local city + state. Used for the DataForSEO geo cascade
+ * (local → adjacent → metro → state → root-phrase) so local-service keywords
+ * get realistic search volumes.
+ *
+ * Returns { metroArea, surroundingCities[] }. Both fields may be empty on
+ * failure — this is enrichment, not a hard dependency.
+ */
+export async function enrichIntakeGeo(args: {
+  city?: string;
+  state?: string;
+  location?: string;
+}): Promise<{ metroArea?: string; surroundingCities?: string[] }> {
+  const city = args.city?.trim();
+  const state = args.state?.trim();
+  const location = args.location?.trim();
+  if (!city && !state && !location) return {};
+
+  const sys = `You are a US geography assistant. Given a small/mid-size US city, return the dominant metro anchor city and 3 nearby cities used for local SEO geo targeting. Output ONLY valid JSON. Never include commentary.`;
+  const usr = `For the following local business location, return:
+- metroArea: the largest dominant metro anchor city for this area (e.g. for Frisco, TX → "Dallas"; for Plano, TX → "Dallas"; for Methuen, MA → "Boston"; for Macon, GA → "Macon" itself if it is already the local metro, otherwise the dominant anchor). Just the city name, no state.
+- surroundingCities: an array of EXACTLY 3 nearby cities that share the local market, ordered nearest first. Use cities that a local-service business would realistically serve customers from. Do NOT include the input city itself or the metroArea. Just city names, no state.
+
+LOCATION:
+  city: ${city || "(unknown)"}
+  state: ${state || "(unknown)"}
+  full location string: ${location || "(unknown)"}
+
+Return only JSON like {"metroArea":"Dallas","surroundingCities":["Plano","McKinney","Allen"]}.`;
+
+  try {
+    const txt = await chatJSON(sys, usr, 256);
+    const parsed = extractJson<{ metroArea?: string; surroundingCities?: string[] }>(txt, {});
+    // Defensively trim and dedupe.
+    const metroArea = parsed.metroArea?.trim() || undefined;
+    const surroundingCities = Array.isArray(parsed.surroundingCities)
+      ? parsed.surroundingCities
+          .map((c) => (typeof c === "string" ? c.trim() : ""))
+          .filter((c) => c && c.toLowerCase() !== (city || "").toLowerCase() && c.toLowerCase() !== (metroArea || "").toLowerCase())
+          .slice(0, 3)
+      : undefined;
+    return { metroArea, surroundingCities };
+  } catch (err) {
+    console.warn("[enrichIntakeGeo] failed; returning empty", err);
+    return {};
+  }
 }
 
 export interface VendastaData {
