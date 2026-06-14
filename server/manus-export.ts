@@ -176,11 +176,22 @@ export async function startManusDeck(
   const prompt = buildPrompt(audit, report);
   const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
 
-  // If the caller uploaded a logo, embed it as a data-URL attachment so Manus
-  // can reference it from the prompt. Manus's image-mode template accepts
-  // mixed-content messages; the text block above explicitly calls out the logo.
+  // If the caller uploaded a logo, embed it as a file ContentPart so Manus
+  // can reference it from the prompt. The v2 API expects type: "file" with
+  // one of file_id / file_url / file_data. We use file_data (inline base64,
+  // capped at 20MB after decode).
+  // Ref: https://open.manus.ai/docs/v2/task.create
   if (opts.logoDataUrl && /^data:image\//.test(opts.logoDataUrl)) {
-    content.push({ type: "image_url", image_url: { url: opts.logoDataUrl } });
+    const match = opts.logoDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (match) {
+      const [, mimeType, base64] = match;
+      content.push({
+        type: "file",
+        file_data: base64,
+        mime_type: mimeType,
+        filename: `logo.${mimeType.split("/")[1]?.replace("svg+xml", "svg") || "png"}`,
+      });
+    }
   }
 
   const body = JSON.stringify({
