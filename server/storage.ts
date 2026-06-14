@@ -46,6 +46,9 @@ try {
   if (!names.has("event_log")) {
     sqlite.exec("ALTER TABLE audits ADD COLUMN event_log TEXT;");
   }
+  if (!names.has("manus_export")) {
+    sqlite.exec("ALTER TABLE audits ADD COLUMN manus_export TEXT;");
+  }
 } catch {
   /* noop */
 }

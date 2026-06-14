@@ -65,6 +65,8 @@ import {
   Phone,
   Zap,
   Target,
+  Presentation,
+  Image as ImageIcon,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -378,6 +380,9 @@ export default function Report() {
 
       {/* Immediate Action Plan (replaces 90-day plan) */}
       <ImmediateActionPlanSection plan={r.immediateActionPlan} />
+
+      {/* Client-Facing Deck — async Manus Slides export */}
+      <ClientFacingDeckCard auditId={data.id} />
 
       {/* Final client deliverable hand-off (Manus PDF upload) */}
       <FinalDeliverableSection
@@ -2732,4 +2737,302 @@ function buildMarkdownOutline(data: AuditDetail): string {
   }
 
   return lines.join("\n");
+}
+
+/* ----------------------------------------------------------------------
+ * ClientFacingDeckCard
+ *
+ * Sends the current audit to Manus to produce a simplified, image-mode
+ * 10-slide client-facing deck. Lets the user attach a logo, watch a
+ * spinner while Manus generates, and then download the slide zip + PDF.
+ *
+ * Polls /api/audits/:id/manus-status every 6s while a task is running.
+ * --------------------------------------------------------------------- */
+type ManusDeckState = {
+  status?: "idle" | "queued" | "running" | "complete" | "failed";
+  taskId?: string;
+  taskUrl?: string;
+  error?: string;
+  hasZip?: boolean;
+  hasPdf?: boolean;
+  slideCount?: number;
+  startedAt?: number;
+  completedAt?: number;
+};
+
+function ClientFacingDeckCard({ auditId }: { auditId: string }) {
+  const [logo, setLogo] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [state, setState] = useState<ManusDeckState>({ status: "idle" });
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+  const startUrl = `${API_BASE}/api/audits/${auditId}/send-to-manus`;
+  const statusUrl = `${API_BASE}/api/audits/${auditId}/manus-status`;
+  const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
+  const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
+
+  // Initial load + polling loop.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function tick() {
+      try {
+        const res = await fetch(statusUrl, { credentials: "include" });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const json = (await res.json()) as ManusDeckState;
+        if (cancelled) return;
+        setState(json);
+        // Continue polling only while running/queued.
+        if (json.status === "queued" || json.status === "running") {
+          timer = setTimeout(tick, 6000);
+        }
+      } catch {
+        if (cancelled) return;
+        // Retry in 15s on transient errors.
+        timer = setTimeout(tick, 15000);
+      }
+    }
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [statusUrl]);
+
+  async function handleSend() {
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const fd = new FormData();
+      if (logo) fd.append("logo", logo);
+      const res = await fetch(startUrl, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
+      toast({
+        title: "Sent to Manus",
+        description: "Generating the client-facing deck. This usually takes a few minutes.",
+      });
+      setState({ status: "running", taskId: json.taskId, taskUrl: json.taskUrl });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Could not start the Manus task.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const isRunning = state.status === "queued" || state.status === "running";
+  const isComplete = state.status === "complete";
+  const isFailed = state.status === "failed";
+
+  function elapsedLabel(): string {
+    if (!state.startedAt) return "";
+    const ms = Date.now() - state.startedAt;
+    const m = Math.floor(ms / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  }
+
+  return (
+    <Card
+      className="no-print border-card-border p-6 md:p-8"
+      data-testid="section-client-facing-deck"
+    >
+      <SectionLabel icon={Presentation}>Client-Facing Deck</SectionLabel>
+      <h3 className="mt-2 text-lg font-bold tracking-tight">
+        Send to Manus, Simplified 10-Slide Overview
+      </h3>
+      <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+        Manus produces an image-mode deck the business owner can actually
+        follow: 3 ranking keywords, 7 opportunity keywords, listings gap, and
+        the reputation story. You can attach the client logo so it appears on
+        every slide.
+      </p>
+
+      <div className="mt-5 grid gap-5">
+        {/* Logo picker (only shown when no task is running yet) */}
+        {!isRunning && !isComplete && (
+          <div className="grid gap-2">
+            <Label>Client logo (optional)</Label>
+            {logo ? (
+              <div
+                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
+                data-testid="manus-logo-file"
+              >
+                <ImageIcon className="h-5 w-5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{logo.name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {(logo.size / 1024).toFixed(0)} KB
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setLogo(null)}
+                  disabled={submitting}
+                  data-testid="manus-logo-remove"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                className="hover-elevate flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-secondary/30 px-4 py-6 text-sm"
+                data-testid="manus-logo-dropzone"
+              >
+                <Upload className="h-5 w-5 text-muted-foreground" />
+                <span className="text-sm font-medium">Click to upload logo (PNG, JPG, SVG)</span>
+                <span className="text-xs text-muted-foreground">
+                  Skip if you do not have a logo yet, Manus will use brand colors
+                </span>
+              </button>
+            )}
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => setLogo(e.target.files?.[0] ?? null)}
+            />
+          </div>
+        )}
+
+        {/* Running spinner */}
+        {isRunning && (
+          <div
+            className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent/10 p-4"
+            data-testid="manus-deck-running"
+          >
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Manus is generating slides</div>
+                <div className="text-xs text-muted-foreground">
+                  Elapsed {elapsedLabel()}. Image-mode decks usually take five to fifteen minutes.
+                </div>
+              </div>
+            </div>
+            {state.taskUrl && (
+              <a
+                href={state.taskUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-accent underline-offset-2 hover:underline"
+              >
+                Open the live Manus task
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Complete: download buttons */}
+        {isComplete && (
+          <div
+            className="flex flex-col gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4"
+            data-testid="manus-deck-complete"
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    Deck ready ({state.slideCount ?? "?"} slides)
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Download the slide images or the assembled PDF.
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {state.hasZip && (
+                  <Button asChild variant="outline" data-testid="button-download-deck-zip">
+                    <a href={zipUrl} target="_blank" rel="noopener noreferrer">
+                      <FileDown className="mr-1.5 h-4 w-4" />
+                      Download Slide Images
+                    </a>
+                  </Button>
+                )}
+                {state.hasPdf && (
+                  <Button
+                    asChild
+                    className="bg-accent text-accent-foreground hover:bg-accent/90"
+                    data-testid="button-download-deck-pdf"
+                  >
+                    <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
+                      <FileDown className="mr-1.5 h-4 w-4" />
+                      Download PDF
+                    </a>
+                  </Button>
+                )}
+              </div>
+            </div>
+            {state.taskUrl && (
+              <a
+                href={state.taskUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              >
+                Open the Manus task to review or revise
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Failed */}
+        {isFailed && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            Manus task failed: {state.error || "unknown error"}
+          </div>
+        )}
+
+        {errorMsg && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {errorMsg}
+          </div>
+        )}
+
+        {/* Send / Resend button */}
+        {!isRunning && (
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={handleSend}
+              disabled={submitting}
+              className="bg-accent text-accent-foreground hover:bg-accent/90"
+              data-testid="button-send-to-manus"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  Sending...
+                </>
+              ) : isComplete || isFailed ? (
+                <>
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  Regenerate Deck
+                </>
+              ) : (
+                <>
+                  <Send className="mr-1.5 h-4 w-4" />
+                  Send to Manus
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
 }

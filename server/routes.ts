@@ -25,6 +25,13 @@ import {
 } from "./dataforseo-client";
 import { readdirSync } from "node:fs";
 import { basename } from "node:path";
+import {
+  startManusDeck,
+  getManusState,
+  deckZipPath,
+  deckPdfPath,
+  deckExists,
+} from "./manus-export";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
 const INTAKE_AUDIT_MIMES = new Set([
@@ -56,53 +63,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  /* Temporary Manus auth probe. Uses v2 endpoint + x-manus-api-key header. */
-  app.get("/api/debug/manus-ping", async (_req, res) => {
-    const raw = process.env.MANUS_API_KEY || "";
-    const key = raw.trim().replace(/^\uFEFF/, "");
-    const info: any = {
-      keyPresent: !!key,
-      keyLength: key.length,
-      keyPrefix: key.slice(0, 7),
-      keySuffix: key.length > 4 ? key.slice(-4) : "",
-    };
-    if (!key) return res.json({ ...info, error: "MANUS_API_KEY not set" });
-    type Try = { name: string; method: string; url: string; headers: Record<string, string>; body?: string };
-    const HK = { "x-manus-api-key": key, Accept: "application/json", "Content-Type": "application/json" };
-    const HB = { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" };
-    const minimalMessage = JSON.stringify({
-      message: { content: [{ type: "text", text: "ping" }] },
-    });
-    const templateMessage = JSON.stringify({
-      message: {
-        content: [
-          {
-            type: "text",
-            text: "Generate a single test slide image using the whiteboard image-mode template.",
-          },
-        ],
-      },
-      template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08",
-      model: "nano-banana",
-    });
-    // Fetch the full listMessages body for the completed task so we can map
-    // every attachment shape (zip, slides, pdf) the response includes.
-    const tries: Try[] = [
-      { name: "v2-task.listMessages FULL", method: "GET", url: "https://api.manus.ai/v2/task.listMessages?task_id=6MpGT63OgmPQ5ws4i5iaPB&limit=50", headers: HK },
-    ];
-    const results: any[] = [];
-    for (const t of tries) {
-      try {
-        const r = await fetch(t.url, { method: t.method, headers: t.headers, body: t.body });
-        const text = await r.text();
-        results.push({ name: t.name, status: r.status, bodySnippet: text.slice(0, 20000) });
-      } catch (err: any) {
-        results.push({ name: t.name, error: err?.message || String(err) });
-      }
-    }
-    res.json({ ...info, results });
-  });
-
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
   registerAuthRoutes(app);
 
@@ -111,7 +71,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", (req, res, next) => {
     const publicPaths = new Set([
       "/health",
-      "/debug/manus-ping",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
@@ -768,6 +727,114 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       createReadStream(filePath).pipe(res);
     } catch (err: any) {
       console.error("manus-pdf download error:", err);
+      res.status(500).json({ message: err?.message || "Download failed" });
+    }
+  });
+
+  /* ------------------------------------------------------------------
+   * Manus Client-Facing Deck — async export of the audit into a simplified
+   * 10-slide deck via Manus Slides / Image-Mode API. Four routes:
+   *   POST   /api/audits/:id/send-to-manus    (multipart: optional logo)
+   *   GET    /api/audits/:id/manus-status     (poll for progress)
+   *   GET    /api/audits/:id/manus-deck-zip   (download slide images zip)
+   *   GET    /api/audits/:id/manus-deck-pdf   (download assembled PDF)
+   * ------------------------------------------------------------------ */
+  app.post(
+    "/api/audits/:id/send-to-manus",
+    upload.single("logo"),
+    async (req, res) => {
+      try {
+        const audit = await storage.getAudit(req.params.id);
+        if (!audit) return res.status(404).json({ message: "Audit not found" });
+        if (audit.status !== "complete") {
+          return res
+            .status(400)
+            .json({ message: "Audit must finish processing before sending to Manus." });
+        }
+        if (!process.env.MANUS_API_KEY) {
+          return res.status(503).json({ message: "MANUS_API_KEY is not configured on the server." });
+        }
+
+        // Convert uploaded logo to a data URL so we can embed it in the prompt.
+        let logoDataUrl: string | undefined;
+        if (req.file && req.file.buffer && req.file.size > 0) {
+          const mime = req.file.mimetype || "image/png";
+          if (!/^image\//.test(mime)) {
+            return res.status(400).json({ message: "Logo must be an image file." });
+          }
+          logoDataUrl = `data:${mime};base64,${req.file.buffer.toString("base64")}`;
+        }
+
+        const { taskId, taskUrl } = await startManusDeck(req.params.id, { logoDataUrl });
+        res.json({ ok: true, taskId, taskUrl, status: "running" });
+      } catch (err: any) {
+        console.error("send-to-manus error:", err);
+        res.status(500).json({ message: err?.message || "Failed to start Manus task" });
+      }
+    },
+  );
+
+  app.get("/api/audits/:id/manus-status", async (req, res) => {
+    try {
+      const state = await getManusState(req.params.id);
+      if (!state) return res.json({ status: "idle" });
+      const hasZip = deckExists(deckZipPath(req.params.id));
+      const hasPdf = deckExists(deckPdfPath(req.params.id));
+      res.json({ ...state, hasZip, hasPdf });
+    } catch (err: any) {
+      console.error("manus-status error:", err);
+      res.status(500).json({ message: err?.message || "Failed to read Manus status" });
+    }
+  });
+
+  app.get("/api/audits/:id/manus-deck-zip", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const p = deckZipPath(req.params.id);
+      if (!existsSync(p)) {
+        return res.status(404).json({ message: "Slide zip not ready yet." });
+      }
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      const stat = statSync(p);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Length", stat.size.toString());
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${slug}-client-facing-slides.zip"`,
+      );
+      createReadStream(p).pipe(res);
+    } catch (err: any) {
+      console.error("manus-deck-zip error:", err);
+      res.status(500).json({ message: err?.message || "Download failed" });
+    }
+  });
+
+  app.get("/api/audits/:id/manus-deck-pdf", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const p = deckPdfPath(req.params.id);
+      if (!existsSync(p)) {
+        return res.status(404).json({ message: "Slide PDF not ready yet." });
+      }
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      const stat = statSync(p);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Length", stat.size.toString());
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${slug}-client-facing-deck.pdf"`,
+      );
+      createReadStream(p).pipe(res);
+    } catch (err: any) {
+      console.error("manus-deck-pdf error:", err);
       res.status(500).json({ message: err?.message || "Download failed" });
     }
   });

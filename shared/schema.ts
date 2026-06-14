@@ -36,6 +36,13 @@ export const audits = sqliteTable("audits", {
    * "script_generated", "script_edited", "delivered", "marked_ready".
    */
   eventLog: text("event_log"),
+  /**
+   * JSON blob tracking the Manus client-facing deck export. Shape:
+   *   { taskId, status, error?, prompt?, slidesUrl?, zipUrl?, pdfUrl?,
+   *     zipFilename?, slideCount?, createdAt, updatedAt }
+   * Status: "queued" | "running" | "complete" | "failed".
+   */
+  manusExport: text("manus_export"),
   createdAt: integer("created_at").notNull(),
 });
 
@@ -45,6 +52,9 @@ export type AuditEventType =
   | "failed"
   | "rerun"
   | "manus_uploaded"
+  | "manus_deck_requested"
+  | "manus_deck_complete"
+  | "manus_deck_failed"
   | "script_generated"
   | "script_edited"
   | "delivered"
