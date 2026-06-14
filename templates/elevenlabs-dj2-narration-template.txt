@@ -31,6 +31,9 @@ And one of the biggest things I want to highlight as we go is this. AI works bes
 [calm, inviting]  
 My role in this presentation is simple. Walk you through what matters, explain what the numbers mean, and help make the next steps feel manageable.
 
+[steady, structured]  
+Here’s the path we’re going to walk together. First, we’ll look at where [BUSINESS NAME] stands today across the four pillars that move the needle for every small business. Those four pillars are AI and Automation, SEO with keywords and listings, Social Media, and Reputation. Then we’ll look at the SMB Smart CRM, the unified hub that connects all four of those pillars into one place, so you’re not logging into ten different platforms just to run your business. And we’ll close with a short, focused 90-day plan so you know exactly what to do next.
+
 [reassuring]  
 So give me just a few minutes to walk you through the full picture. Write down any questions that come up along the way, so we can make sure those get addressed.
 
@@ -39,144 +42,169 @@ Alright, let’s walk through your audit together.
 
 ***
 
-### Slide 1
+### Slide 1 — Cover
 
 [warmly, conversational]  
 As we look at slide number one…
 
-[describe what the slide is titled and what it shows]
+[name the cover: “Digital Presence Audit” for [BUSINESS NAME] in [CITY]]
 
-[brief, clear explanation of the key elements on the slide]
-
-[one simple analogy or plain-English reframing, if helpful]
+[one warm sentence acknowledging what they’ve built]
 
 ***
 
-### Slide 2
+### Slide 2 — Where You Stand Today (Four-Pillar Scoreboard)
 
 [confident, steady]  
 As we continue now looking at slide number two…
 
-[describe the main headline, score, or visual]
+[name the overall grade and what it means in plain English]
 
-[explain the key points in simple language]
+[walk through the four-pillar scoreboard in this exact order: AI and Automation, SEO with keywords and listings, Social Media, then Reputation. Read each pillar’s grade and one-line status from the slide]
 
-[optional: short analogy that makes the concept feel concrete]
+[one steady closing line: “The foundation is real. The gaps are fixable. The opportunity is now.”]
 
 ***
 
-### Slide 3
+### Slide 3 — Pillar I: AI and Automation
 
 [calm, guiding]  
-As we continue now looking at slide number three…
+As we continue now looking at slide number three, this is Pillar One, AI and Automation…
 
-[describe what this slide covers]
+[explain that this is the discovery channel of the future, where customers ask AI assistants like ChatGPT, Gemini, and Perplexity for recommendations]
 
-[explain the grades, scores, or sections on the slide]
+[describe what the slide shows on the right side about this client’s current AI footprint, including which AI assistants do and don’t cite them, and what automation infrastructure is missing]
 
-[restate the main takeaway in one clear sentence]
+[describe the SMB Solutions 24/7 AI workforce on the left side: AI Receptionist, Chat Agent, Support Agent, Follow-Up Agent, Routing Agent. One sentence on what each does for a small business]
+
+[close with the result line: “Never miss a lead or customer inquiry again.”]
 
 ***
 
-### Slide 4
+### Slide 4 — Pillar II: SEO with Keywords and Listings (Overview)
 
 [more serious, focused]  
-As we continue now looking at slide number four…
+As we continue now looking at slide number four, this is Pillar Two, SEO with Keywords and Listings…
 
-[name the pillar or topic of this slide]
+[explain what local SEO, AEO, and GEO actually mean in plain English: being found when people search on Google, and being cited when people ask AI engines]
 
-[call out the grade or score if shown]
+[name the client’s SEO grade and one-line summary from the slide]
 
-[describe what’s missing or what the slide is warning about]
-
-[describe the opportunity or “what to do” that the slide points to]
+[set up that the next two slides will go deeper, first into keywords, then into directory listings]
 
 ***
 
-### Slide 5
+### Slide 5 — Keywords: What’s Working and What’s Missed
 
 [firm, analytical]  
 As we continue now looking at slide number five…
 
-[explain the headline or key statement]
+[explain the headline: 3 keywords working, 7 opportunities waiting]
 
-[walk through the most important numbers or bullets]
+[read the three currently-ranking keywords from the slide and note these are brand searches, people who already know the name]
 
-[close with one short line that sums up what this slide means in real life]
+[read the seven opportunity keywords and emphasize the total monthly search volume going to competitors right now]
+
+[close with one line: these are not strangers, these are neighbors in [CITY] actively looking for what this business sells]
 
 ***
 
-### Slide 6
+### Slide 6 — Listings: The Directory Gap
 
 [calm, steady]  
 As we continue now looking at slide number six…
 
-[describe the main topic of the slide]
+[read the headline number from the slide: X out of Y directories unclaimed, and the percent missing]
 
-[explain what’s missing, broken, or out of alignment]
+[name the notable missing directories shown on the slide and why each one matters in one short phrase]
 
-[point out the main recommended action this slide is pushing toward]
+[explain that every unclaimed listing is a missed trust signal for Google to verify the business is real, local, and trustworthy]
 
 ***
 
-### Slide 7
+### Slide 7 — Pillar III: Social Media Presence
 
 [empathetic, practical]  
-As we continue now looking at slide number seven…
+As we continue now looking at slide number seven, this is Pillar Three, Social Media Presence…
 
-[name the pillar or focus of this slide]
+[give a genuine pat on the back for what’s already working: which platforms they’re active on, what’s working from the slide]
 
-[describe the “current reality” points]
+[describe what needs attention from the slide: gaps, manual posting strain, missing platforms]
 
-[describe “the plan” or “what’s next” points]
+[describe the SMB Solutions value prop on the left side: consistent AI-assisted posting, brand-aligned messaging, engagement support, professional visibility]
 
-[one short line connecting reviews/trust/appointments or equivalent for that industry]
+[close with the result line: “Stay visible and relevant without constant manual effort.”]
 
 ***
 
-### Slide 8
+### Slide 8 — Pillar IV: Reputation Management and Trust
 
 [slight energy lift]  
-As we continue now looking at slide number eight…
+As we continue now looking at slide number eight, this is Pillar Four, Reputation Management and Trust…
 
-[describe the current state shown on the slide]
+[read the reputation snapshot from the slide: review count, star rating, what’s working, what’s missing]
 
-[describe the recommended content mix, cadence, or behavior]
+[explain why reviews are the digital equivalent of word of mouth in a trust-dependent category, and that the gap is almost never service quality, it’s the absence of a system to ask]
 
-[one simple analogy about visibility, consistency, or being remembered]
+[describe what SMB Solutions provides on the left side: monitor reviews across all platforms, automate review requests, respond professionally and consistently, protect and grow brand reputation]
+
+[close with the result line: “Turn trust into more calls, bookings, and sales.”]
 
 ***
 
-### Slide 9
+### Slide 9 — SMB Smart CRM: The Unified Hub
 
 [organized, momentum-building]  
 As we continue now looking at slide number nine…
 
-[explain that this is the action plan slide]
+[explain that this is the slide where everything connects. The four pillars all flow into one place: the SMB Smart CRM]
 
-[briefly list the critical actions]
+[walk through the CRM benefits in plain English, in this order: capture leads from calls, forms, chat, and messages; track every interaction in one unified customer timeline; manage sales stages, pipelines, and opportunities visually; automate follow-ups, reminders, and task assignments; sync with email, SMS, and scheduling tools]
 
-[briefly list the high-priority actions]
+[describe what the right side of the slide shows: a single dashboard with contacts, leads, deals in pipeline, won deals, revenue, and a 360-degree contact view, all in one place instead of ten platforms]
 
-[mention any quick wins called out on the slide]
-
-[close with one line about how these actions stack together]
+[close with one clear line: “Built around four pillars, connected through one unified client hub.”]
 
 ***
 
-### Slide 10
+### Slide 10 — Four Pillars, One Hub (Recap)
 
-[hopeful, confident]  
+[steady, integrative]  
 As we continue now looking at slide number ten…
 
-[describe how this slide shows the pillars working together]
+[recap how the four pillars work together: AI handles the conversations, SEO brings the customers in, social keeps them engaged, reputation closes the trust gap, and the CRM holds it all in one place]
 
-[mention 2–4 expected outcomes that matter most]
+[one line on why this matters for a busy business owner: simpler operations, more visibility, more revenue, less burnout]
 
-[one clear line about “more leads, more revenue” or the core benefit]
+***
+
+### Slide 11 — Three Focused Steps for the Next 90 Days
+
+[organized, momentum-building]  
+As we continue now looking at slide number eleven…
+
+[walk through the three numbered steps from the slide in order, with the timeframe and the impact for each]
+
+[reassure the owner that these are not overwhelming projects, and that SMB Solutions is here to do the heavy lifting]
+
+***
+
+### Slide 12 — Close
+
+[hopeful, confident]  
+And as we close on slide number twelve…
+
+[acknowledge what [BUSINESS NAME] has already built and frame the audit as a map, not a list of failures]
+
+[read “What SMB Solutions Provides” from the right side of the slide: listing management, automated review collection and reputation monitoring, social media scheduling and content support, ongoing reporting]
+
+[deliver the closing quote from the slide and the call to action: schedule your strategy session with SMB Solutions today]
 
 [warm closing]  
 Thank you for walking through this audit with me. When you’re ready, we’re here to help you turn this plan into action.
+
+[note for the narrator]  
+If the actual deck includes more than twelve slides (some audits add an extra keywords or competitor slide, up to fifteen total), follow the same pattern: open with “As we continue now looking at slide number [N]…”, describe what the slide shows in plain English, and connect it back to whichever of the four pillars or to the unified CRM it supports.
 
 ***
 
