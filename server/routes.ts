@@ -43,12 +43,32 @@ const INTAKE_AUDIT_MIMES = new Set([
 ]);
 const FINAL_PDF_MIMES = new Set(["application/pdf"]);
 
+// Allowed mime types for client logo uploads (Send to Manus deck export).
+const IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "image/svg+xml",
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per file
   fileFilter: (_req, file, cb) => {
     if (INTAKE_AUDIT_MIMES.has(file.mimetype)) cb(null, true);
     else cb(new Error(`Unsupported file type: ${file.mimetype}`));
+  },
+});
+
+// Separate multer instance for image uploads (client logos).
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per image
+  fileFilter: (_req, file, cb) => {
+    if (IMAGE_MIMES.has(file.mimetype)) cb(null, true);
+    else cb(new Error(`Unsupported logo file type: ${file.mimetype}. Please upload a PNG, JPG, WebP, GIF, or SVG.`));
   },
 });
 
@@ -776,7 +796,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * ------------------------------------------------------------------ */
   app.post(
     "/api/audits/:id/send-to-manus",
-    upload.single("logo"),
+    imageUpload.single("logo"),
     async (req, res) => {
       try {
         const audit = await storage.getAudit(req.params.id);
