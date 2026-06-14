@@ -229,6 +229,26 @@ export default function Report() {
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button
+            variant="default"
+            size="sm"
+            onClick={() => {
+              const el = document.getElementById("client-facing-deck");
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                // Soft highlight pulse so the user can see where they landed.
+                el.classList.add("ring-2", "ring-accent", "ring-offset-2");
+                setTimeout(() => {
+                  el.classList.remove("ring-2", "ring-accent", "ring-offset-2");
+                }, 1800);
+              }
+            }}
+            className="bg-accent text-accent-foreground hover:bg-accent/90"
+            data-testid="button-jump-to-manus"
+          >
+            <Send className="mr-1.5 h-4 w-4" />
+            Send to Manus
+          </Button>
+          <Button
             variant="outline"
             size="sm"
             onClick={handleDownloadPdf}
@@ -2842,7 +2862,8 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
 
   return (
     <Card
-      className="no-print border-card-border p-6 md:p-8"
+      id="client-facing-deck"
+      className="no-print border-card-border p-6 md:p-8 transition-shadow duration-500"
       data-testid="section-client-facing-deck"
     >
       <SectionLabel icon={Presentation}>Client-Facing Deck</SectionLabel>

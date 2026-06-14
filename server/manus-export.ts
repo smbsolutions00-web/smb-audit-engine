@@ -184,10 +184,12 @@ export async function startManusDeck(
   if (opts.logoDataUrl && /^data:image\//.test(opts.logoDataUrl)) {
     const match = opts.logoDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
     if (match) {
-      const [, mimeType, base64] = match;
+      const [, mimeType] = match;
+      // Manus expects file_data as a full data URI (it explicitly errored
+      // with "invalid data URI format in file_data" when we sent raw base64).
       content.push({
         type: "file",
-        file_data: base64,
+        file_data: opts.logoDataUrl,
         mime_type: mimeType,
         filename: `logo.${mimeType.split("/")[1]?.replace("svg+xml", "svg") || "png"}`,
       });
