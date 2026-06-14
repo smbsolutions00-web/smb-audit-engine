@@ -379,6 +379,37 @@ function AuditCard({
                 Retry audit
               </DropdownMenuItem>
             )}
+            {isComplete && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <DropdownMenuItem
+                    onSelect={(e) => e.preventDefault()}
+                    disabled={isRetrying}
+                  >
+                    {isRetrying ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                    )}
+                    Rerun audit
+                  </DropdownMenuItem>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Rerun this audit?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This regenerates the report for {audit.clientName} using the original intake and audit data. The existing report will be replaced.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={onRetry}>
+                      Rerun
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
             {(isComplete || isFailed) && <DropdownMenuSeparator />}
             <AlertDialog>
               <AlertDialogTrigger asChild>
