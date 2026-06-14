@@ -818,16 +818,17 @@ WEBSITE: ${website}
 INTAKE FORM DATA:
 ${JSON.stringify(intake, null, 2)}
 
-VENDASTA SNAPSHOT DATA:
+DIGITAL PRESENCE SNAPSHOT DATA:
 ${JSON.stringify(vendasta, null, 2)}
 
-KEYSEARCH KEYWORD DATA (${keysearch.length} rows):
-${keysearch.length > 0 ? JSON.stringify(keysearch.slice(0, 80), null, 2) : "(No Keysearch CSV provided; infer ranking and opportunity keywords from Vendasta data, the client's industry, and location.)"}
+KEYWORD RESEARCH DATA (${keysearch.length} rows):
+${keysearch.length > 0 ? JSON.stringify(keysearch.slice(0, 80), null, 2) : "(No keyword CSV provided; infer ranking and opportunity keywords from the snapshot data, the client's industry, and location.)"}
 
 REQUIREMENTS:
 - SEO + Listings is the DEEPEST pillar; give it the most detail.
-- For seoDeep.domainAuthority: use the Vendasta value if present, otherwise estimate from the website's age, backlink profile, and industry. Always return a number.
-- For seoDeep.rankingKeywords: include up to 15 rows. Prioritize Keysearch data; merge with Vendasta. Sort by position ascending.
+- For seoDeep.domainAuthority: use the snapshot value if present, otherwise estimate from the website's age, backlink profile, and industry. Always return a number.
+- For seoDeep.rankingKeywords: include up to 15 rows. Prioritize keyword research data; merge with the snapshot. Sort by position ascending.
+- BRAND NAMING: NEVER use the words "Vendasta", "Manus", or any third-party platform brand name in any string field of the report. If you need to refer to the source platform, use "SMB Solutions CRM" or simply "our system". This is a strict requirement.
 - For seoDeep.opportunityKeywords: identify up to 12 high-value gap keywords (decent volume, moderate difficulty, transactional/commercial intent). Use Keysearch data + your knowledge of the industry.
 - Listings: cover Google, Bing, Facebook, Yelp, Apple Maps, Instagram, BBB, and 5+ industry-specific directories.
 - AI Automation platforms array MUST include all SIX platforms in the order shown above (ChatGPT, Google Gemini, Perplexity, Grok, Microsoft Copilot, Claude). For each, judge whether the business is likely to be surfaced/cited when someone asks that AI for a recommendation in this category and market. Notes should be plain-English and specific (e.g., "Not cited when prompting ChatGPT for HVAC contractors near Macon, GA. The site has no schema.org markup and no AI-readable FAQ content.").
@@ -1051,9 +1052,34 @@ Return ONLY the JSON object.`;
     console.warn("[generateReport] live-validation merge failed", err);
   }
 
-  // Server-side safety net: strip em-dashes / en-dashes from every string field.
-  // The model is instructed not to use them, but this guarantees clean output.
-  return stripDashes(parsed);
+  // Server-side safety net: strip em-dashes / en-dashes AND scrub forbidden
+  // brand names from every string field. The model is instructed not to use them,
+  // but this guarantees clean output.
+  return stripForbiddenWords(stripDashes(parsed));
+}
+
+/**
+ * Recursively walks a parsed value and replaces forbidden brand names inside
+ * every string. Per Dwayne's directive: client-facing materials must NEVER
+ * mention "Vendasta" or "Manus". Replace with "SMB Solutions CRM".
+ */
+function stripForbiddenWords<T>(value: T): T {
+  if (typeof value === "string") {
+    return value
+      .replace(/\bvendasta\b/gi, "SMB Solutions CRM")
+      .replace(/\bmanus\b/gi, "SMB Solutions CRM") as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => stripForbiddenWords(v)) as unknown as T;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = stripForbiddenWords(v);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 /**
