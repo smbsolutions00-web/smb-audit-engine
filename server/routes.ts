@@ -68,49 +68,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     };
     if (!key) return res.json({ ...info, error: "MANUS_API_KEY not set" });
     type Try = { name: string; method: string; url: string; headers: Record<string, string>; body?: string };
-    const H = { "x-manus-api-key": key, Accept: "application/json", "Content-Type": "application/json" };
+    const HK = { "x-manus-api-key": key, Accept: "application/json", "Content-Type": "application/json" };
+    const HB = { Authorization: `Bearer ${key}`, Accept: "application/json", "Content-Type": "application/json" };
+    const minimalMessage = JSON.stringify({
+      message: { content: [{ type: "text", text: "ping" }] },
+    });
+    const templateMessage = JSON.stringify({
+      message: {
+        content: [
+          {
+            type: "text",
+            text: "Generate a single test slide image using the whiteboard image-mode template.",
+          },
+        ],
+      },
+      template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08",
+      model: "nano-banana",
+    });
     const tries: Try[] = [
-      // Discover real path roots. Manus told us /v2/* is 404 but accepted our key,
-      // so try the next likely path families. We hit GET endpoints first so a
-      // 404 vs 401 vs 405 tells us where the real namespace lives.
-      { name: "root",                method: "GET",  url: "https://api.manus.ai/", headers: H },
-      { name: "v1",                  method: "GET",  url: "https://api.manus.ai/v1", headers: H },
-      { name: "v2",                  method: "GET",  url: "https://api.manus.ai/v2", headers: H },
-      { name: "openapi",             method: "GET",  url: "https://api.manus.ai/openapi.json", headers: H },
-      { name: "swagger",             method: "GET",  url: "https://api.manus.ai/swagger.json", headers: H },
-      { name: "v1-templates",        method: "GET",  url: "https://api.manus.ai/v1/templates", headers: H },
-      { name: "v1-template-by-uid",  method: "GET",  url: "https://api.manus.ai/v1/templates/whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", headers: H },
-      { name: "v1-renders",          method: "GET",  url: "https://api.manus.ai/v1/renders", headers: H },
-      { name: "v1-images",           method: "GET",  url: "https://api.manus.ai/v1/images", headers: H },
-      { name: "v1-generations",      method: "GET",  url: "https://api.manus.ai/v1/generations", headers: H },
-      { name: "v1-jobs",             method: "GET",  url: "https://api.manus.ai/v1/jobs", headers: H },
-      { name: "v1-runs",             method: "GET",  url: "https://api.manus.ai/v1/runs", headers: H },
-      { name: "v1-slides",           method: "GET",  url: "https://api.manus.ai/v1/slides", headers: H },
-      { name: "v1-decks",            method: "GET",  url: "https://api.manus.ai/v1/decks", headers: H },
-      { name: "v1-image-tasks",      method: "GET",  url: "https://api.manus.ai/v1/image-tasks", headers: H },
-      { name: "v1-image-generations", method: "GET", url: "https://api.manus.ai/v1/image-generations", headers: H },
-      // POST a template-render-shaped body to a few likely paths to see which one accepts the shape.
-      {
-        name: "POST v1-renders template",
-        method: "POST",
-        url: "https://api.manus.ai/v1/renders",
-        headers: H,
-        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
-      },
-      {
-        name: "POST v1-images template",
-        method: "POST",
-        url: "https://api.manus.ai/v1/images",
-        headers: H,
-        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
-      },
-      {
-        name: "POST v1-image-tasks template",
-        method: "POST",
-        url: "https://api.manus.ai/v1/image-tasks",
-        headers: H,
-        body: JSON.stringify({ template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08", model: "nano-banana", inputs: { prompt: "ping" } }),
-      },
+      // GET routes from v2 RPC-style namespace
+      { name: "v2-task.list xManusKey",   method: "GET",  url: "https://api.manus.ai/v2/task.list", headers: HK },
+      { name: "v2-task.list Bearer",     method: "GET",  url: "https://api.manus.ai/v2/task.list", headers: HB },
+      // POST task.create with minimal valid body, both auth schemes
+      { name: "v2-task.create xManusKey minimal", method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HK, body: minimalMessage },
+      { name: "v2-task.create Bearer minimal",    method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HB, body: minimalMessage },
+      // POST task.create with template_uid + nano-banana model
+      { name: "v2-task.create xManusKey template", method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HK, body: templateMessage },
     ];
     const results: any[] = [];
     for (const t of tries) {
