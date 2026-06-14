@@ -14,11 +14,22 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 /* -------------------- PDF + CSV parsing -------------------- */
 
 export async function parsePdfBuffer(buf: Buffer): Promise<string> {
-  // Lazy-load to avoid pdf-parse's debug-mode auto-test on import
-  const pdfParse = (await import("pdf-parse")).default as (b: Buffer) => Promise<{ text: string }>;
+  // pdf-parse v2 changed its API — the default export is no longer a callable
+  // function. The new API is a `PDFParse` class with a `getText()` method.
+  // Lazy-load to avoid any top-level side effects on import.
   try {
-    const result = await pdfParse(buf);
-    return (result.text || "").trim();
+    const mod = (await import("pdf-parse")) as unknown as {
+      PDFParse?: new (opts: { data: Buffer }) => { getText: () => Promise<{ text: string }> };
+      default?: { PDFParse?: new (opts: { data: Buffer }) => { getText: () => Promise<{ text: string }> } };
+    };
+    const PDFParseCtor = mod.PDFParse || mod.default?.PDFParse;
+    if (!PDFParseCtor) {
+      console.error("pdf-parse: PDFParse class not found in module", Object.keys(mod));
+      return "";
+    }
+    const parser = new PDFParseCtor({ data: buf });
+    const result = await parser.getText();
+    return (result?.text || "").trim();
   } catch (e) {
     console.error("pdf-parse failed:", e);
     return "";
