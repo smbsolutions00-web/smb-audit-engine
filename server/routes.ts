@@ -76,6 +76,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  /* Raw Serper.dev probe so we can see exactly what knowledgeGraph fields are
+     populated for a given business. */
+  app.get("/api/debug/serper-raw", async (req, res) => {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.status(400).json({ error: "missing ?q=" });
+    const key = (process.env.SERPER_API_KEY || "").trim();
+    if (!key) return res.status(500).json({ error: "no SERPER_API_KEY in env" });
+    try {
+      const r = await fetch("https://google.serper.dev/search", {
+        method: "POST",
+        headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+        body: JSON.stringify({ q, num: 10 }),
+      });
+      const status = r.status;
+      const json: any = await r.json().catch(() => ({}));
+      res.json({
+        httpStatus: status,
+        hasKnowledgeGraph: !!json?.knowledgeGraph,
+        knowledgeGraph: json?.knowledgeGraph || null,
+        organicTitles: (json?.organic || []).slice(0, 5).map((o: any) => ({ title: o.title, link: o.link })),
+        placesCount: (json?.places || []).length,
+        firstPlaces: (json?.places || []).slice(0, 5),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
+  });
+
   /* Raw DataForSEO probe — bypasses parsing so we can see exactly which
      item types, fields, and shapes the API returns. */
   app.get("/api/debug/dfs-raw", async (req, res) => {
@@ -135,6 +163,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "/health",
       "/debug/validate",
       "/debug/dfs-raw",
+      "/debug/serper-raw",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
