@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Pencil } from "lucide-react";
 import {
   Select,
@@ -44,6 +46,14 @@ import {
   TrendingUp,
   Search,
   Sparkles,
+  Save,
+  RotateCw,
+  Eye,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  Send,
   Star,
   Globe,
   Users,
@@ -66,6 +76,8 @@ import type {
   CoreWebVital,
   ImmediateActionItem,
   ImmediateActionPlan,
+  AuditEvent,
+  AuditEventType,
 } from "@shared/schema";
 import { gradeBg, gradeColor, formatDate, formatNumber, formatCurrency } from "@/lib/utils-audit";
 import { Logo } from "@/components/Logo";
@@ -97,6 +109,8 @@ interface AuditDetail {
   createdAt: number;
   reportData?: ReportData | null;
   intakeData?: IntakeShape | null;
+  eventLog?: AuditEvent[];
+  hasEditedScript?: boolean;
 }
 
 export default function Report() {
@@ -369,6 +383,12 @@ export default function Report() {
       <FinalDeliverableSection
         auditId={data.id}
         uploadedAt={data.intakeData?.manusPdfUploadedAt ?? null}
+      />
+
+      {/* Activity timeline (audit events with timestamps) */}
+      <ActivityTimeline
+        events={data.eventLog || []}
+        createdAt={data.createdAt}
       />
 
     </div>
@@ -1903,6 +1923,140 @@ function KeysearchPullButton({ auditId }: { auditId: string }) {
   );
 }
 
+/* -------------------- Activity Timeline -------------------- */
+
+const EVENT_LABELS: Record<AuditEventType, string> = {
+  created: "Audit created",
+  completed: "Report generated",
+  failed: "Generation failed",
+  rerun: "Audit re-run",
+  manus_uploaded: "Manus PDF uploaded",
+  script_generated: "ElevenLabs script generated",
+  script_edited: "Script edited",
+  delivered: "Marked as delivered",
+  marked_ready: "Marked as ready",
+};
+
+function eventIcon(type: AuditEventType) {
+  switch (type) {
+    case "created":
+      return <Sparkle className="h-3.5 w-3.5" />;
+    case "completed":
+      return <CheckCircle2 className="h-3.5 w-3.5 text-accent" />;
+    case "failed":
+      return <XCircle className="h-3.5 w-3.5 text-destructive" />;
+    case "rerun":
+      return <RefreshCw className="h-3.5 w-3.5" />;
+    case "manus_uploaded":
+      return <Upload className="h-3.5 w-3.5" />;
+    case "script_generated":
+      return <Sparkles className="h-3.5 w-3.5 text-accent" />;
+    case "script_edited":
+      return <Pencil className="h-3.5 w-3.5" />;
+    case "delivered":
+      return <Send className="h-3.5 w-3.5 text-accent" />;
+    case "marked_ready":
+      return <Check className="h-3.5 w-3.5" />;
+    default:
+      return <Clock className="h-3.5 w-3.5" />;
+  }
+}
+
+function formatEventTime(ts: number): string {
+  return new Date(ts).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatEventMeta(ev: AuditEvent): string {
+  const m = ev.meta as Record<string, unknown> | undefined;
+  if (!m) return "";
+  if (ev.type === "completed" && (m.grade || m.score != null)) {
+    const parts: string[] = [];
+    if (m.grade) parts.push(`Grade ${m.grade}`);
+    if (m.score != null) parts.push(`${m.score}/100`);
+    return parts.join(" \u00b7 ");
+  }
+  if (ev.type === "failed" && m.error) {
+    const e = String(m.error);
+    return e.length > 80 ? e.slice(0, 77) + "..." : e;
+  }
+  if (ev.type === "manus_uploaded" && m.sizeBytes != null) {
+    const kb = Math.round(Number(m.sizeBytes) / 1024);
+    return `${kb} KB${m.format ? " \u00b7 " + m.format : ""}`;
+  }
+  if (ev.type === "script_generated") {
+    const parts: string[] = [];
+    if (m.regenerated) parts.push("regenerated");
+    if (m.chars != null) parts.push(`${Number(m.chars).toLocaleString()} chars`);
+    return parts.join(" \u00b7 ");
+  }
+  if (ev.type === "script_edited" && m.chars != null) {
+    return `${Number(m.chars).toLocaleString()} chars`;
+  }
+  return "";
+}
+
+function ActivityTimeline({
+  events,
+  createdAt,
+}: {
+  events: AuditEvent[];
+  createdAt: number;
+}) {
+  // If the eventLog is empty (audit predates the event-log feature), synthesize
+  // a single "created" event from createdAt so the section never looks broken.
+  const synthesized: AuditEvent[] =
+    events.length === 0 ? [{ type: "created", at: createdAt }] : events;
+
+  // Newest first.
+  const sorted = [...synthesized].sort((a, b) => b.at - a.at);
+
+  return (
+    <Card
+      className="no-print border-card-border p-6 md:p-8"
+      data-testid="section-activity-timeline"
+    >
+      <SectionLabel icon={Clock}>Activity</SectionLabel>
+      <h3 className="mt-2 text-lg font-bold tracking-tight">Audit Timeline</h3>
+      <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+        Every meaningful event on this audit with a timestamp for reference.
+      </p>
+
+      <ScrollArea className="mt-5 max-h-96 pr-3">
+        <ol className="relative space-y-3 border-l border-card-border pl-5">
+          {sorted.map((ev, i) => (
+            <li
+              key={`${ev.at}-${i}`}
+              className="relative"
+              data-testid={`event-${ev.type}`}
+            >
+              <span className="absolute -left-[1.4rem] top-1 flex h-5 w-5 items-center justify-center rounded-full border border-card-border bg-background">
+                {eventIcon(ev.type)}
+              </span>
+              <div className="flex flex-col gap-0.5">
+                <div className="text-sm font-medium">
+                  {EVENT_LABELS[ev.type] || ev.type}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {formatEventTime(ev.at)}
+                  {formatEventMeta(ev) && (
+                    <span className="ml-2 italic">{formatEventMeta(ev)}</span>
+                  )}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </ScrollArea>
+    </Card>
+  );
+}
+
 /* -------------------- Final Manus Deliverable -------------------- */
 function FinalDeliverableSection({
   auditId,
@@ -1916,19 +2070,35 @@ function FinalDeliverableSection({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Script editor state. The flow: click "View & Edit Script" -> modal opens,
+  // fetches /elevenlabs-script?format=json (returns saved edits if any, else
+  // freshly generates). User edits in textarea -> Save persists to the audit
+  // record. Download streams the same content as .txt. Regenerate clears the
+  // saved edits and rebuilds from the Manus PDF (with a confirmation).
+  const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptSaving, setScriptSaving] = useState(false);
+  const [scriptText, setScriptText] = useState("");
+  const [scriptIsEdited, setScriptIsEdited] = useState(false);
+  const [scriptDirty, setScriptDirty] = useState(false);
   const [scriptError, setScriptError] = useState<string | null>(null);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj2-script.txt");
+  const { toast } = useToast();
 
   const hasUploaded = !!uploadedAt;
   const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
   const downloadUrl = `${API_BASE}/api/audits/${auditId}/manus-pdf`;
   const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
 
-  async function downloadElevenLabsScript() {
+  async function loadScript(opts: { regenerate?: boolean } = {}) {
     setScriptLoading(true);
     setScriptError(null);
     try {
-      const res = await fetch(scriptUrl, { credentials: "include" });
+      const url = opts.regenerate
+        ? `${scriptUrl}?format=json&regenerate=1`
+        : `${scriptUrl}?format=json`;
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
         let msg = `Failed (HTTP ${res.status})`;
         try {
@@ -1939,23 +2109,71 @@ function FinalDeliverableSection({
         }
         throw new Error(msg);
       }
-      const blob = await res.blob();
-      const cd = res.headers.get("content-disposition") || "";
-      const m = cd.match(/filename="([^"]+)"/);
-      const filename = m?.[1] || "elevenlabs-dj2-script.txt";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const json = await res.json();
+      setScriptText(json.script || "");
+      setScriptIsEdited(!!json.edited);
+      setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
+      setScriptDirty(false);
+      if (opts.regenerate) {
+        // Invalidate the audit query so the event log timeline picks up the
+        // new script_generated event.
+        queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+      }
     } catch (e: any) {
-      setScriptError(e?.message || "Could not generate script.");
+      setScriptError(e?.message || "Could not load script.");
     } finally {
       setScriptLoading(false);
     }
+  }
+
+  async function openScriptEditor() {
+    setScriptOpen(true);
+    if (!scriptText) {
+      await loadScript();
+    }
+  }
+
+  async function saveScript() {
+    setScriptSaving(true);
+    setScriptError(null);
+    try {
+      const res = await fetch(scriptUrl, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script: scriptText }),
+      });
+      if (!res.ok) {
+        let msg = `Save failed (HTTP ${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.message) msg = j.message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg);
+      }
+      setScriptIsEdited(true);
+      setScriptDirty(false);
+      toast({ title: "Script saved", description: "Your edits are stored on this audit." });
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+    } catch (e: any) {
+      setScriptError(e?.message || "Save failed.");
+    } finally {
+      setScriptSaving(false);
+    }
+  }
+
+  function downloadScriptFromText() {
+    const blob = new Blob([scriptText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = scriptFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   async function handleSubmit() {
@@ -2026,29 +2244,29 @@ function FinalDeliverableSection({
                 </Button>
                 <Button
                   type="button"
-                  onClick={downloadElevenLabsScript}
+                  onClick={openScriptEditor}
                   disabled={scriptLoading}
                   className="bg-accent text-accent-foreground hover:bg-accent/90"
-                  data-testid="button-download-elevenlabs-script"
+                  data-testid="button-view-elevenlabs-script"
                 >
-                  {scriptLoading ? (
+                  {scriptLoading && !scriptOpen ? (
                     <>
                       <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                       Generating...
                     </>
                   ) : (
                     <>
-                      <FileDown className="mr-1.5 h-4 w-4" />
-                      ElevenLabs Script
+                      <Eye className="mr-1.5 h-4 w-4" />
+                      View & Edit Script
                     </>
                   )}
                 </Button>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              The ElevenLabs script is the DJ #2 narration written from this PDF —
-              ready to paste into ElevenLabs block by block. Generation takes about
-              20 seconds.
+              The ElevenLabs script is the DJ #2 narration written from this PDF.
+              Open it to preview, make edits, save, and download. First generation
+              takes about 20 seconds.
             </p>
             {scriptError && (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
@@ -2135,6 +2353,152 @@ function FinalDeliverableSection({
           </div>
         )}
       </div>
+
+      {/* -------- ElevenLabs script viewer + editor -------- */}
+      <Dialog
+        open={scriptOpen}
+        onOpenChange={(o) => {
+          // Block closing if there are unsaved edits.
+          if (!o && scriptDirty) {
+            const ok = window.confirm("You have unsaved edits. Close anyway?");
+            if (!ok) return;
+          }
+          setScriptOpen(o);
+        }}
+      >
+        <DialogContent
+          className="max-w-4xl"
+          data-testid="dialog-elevenlabs-script"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkle className="h-5 w-5 text-accent" />
+              ElevenLabs DJ #2 Script
+              {scriptIsEdited && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  Edited
+                </Badge>
+              )}
+              {scriptDirty && (
+                <Badge variant="outline" className="ml-1 border-amber-500 text-xs text-amber-600">
+                  Unsaved changes
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Preview, edit, and download the narration script. Edits are saved on
+              this audit and will be served the next time you open or download.
+              Regenerate to rebuild from the Manus PDF.
+            </DialogDescription>
+          </DialogHeader>
+
+          {scriptLoading ? (
+            <div className="flex h-96 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Generating script… this takes about 20 seconds.
+            </div>
+          ) : (
+            <Textarea
+              value={scriptText}
+              onChange={(e) => {
+                setScriptText(e.target.value);
+                setScriptDirty(true);
+              }}
+              className="h-96 max-h-[60vh] min-h-[24rem] font-mono text-xs"
+              spellCheck={false}
+              data-testid="textarea-elevenlabs-script"
+            />
+          )}
+
+          {scriptError && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              {scriptError}
+            </div>
+          )}
+
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmRegenerate(true)}
+                disabled={scriptLoading || scriptSaving}
+                data-testid="button-regenerate-script"
+              >
+                <RotateCw className="mr-1.5 h-4 w-4" />
+                Regenerate
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={downloadScriptFromText}
+                disabled={!scriptText || scriptLoading}
+                data-testid="button-download-script"
+              >
+                <FileDown className="mr-1.5 h-4 w-4" />
+                Download .txt
+              </Button>
+              <Button
+                type="button"
+                onClick={saveScript}
+                disabled={!scriptDirty || scriptSaving || scriptLoading}
+                className="bg-accent text-accent-foreground hover:bg-accent/90"
+                data-testid="button-save-script"
+              >
+                {scriptSaving ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-1.5 h-4 w-4" />
+                    Save
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation: Regenerate destroys saved edits */}
+      <Dialog open={confirmRegenerate} onOpenChange={setConfirmRegenerate}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Regenerate the script?</DialogTitle>
+            <DialogDescription>
+              This rebuilds the narration from the Manus PDF and report data.
+              {scriptIsEdited || scriptDirty
+                ? " Your saved edits will be replaced."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmRegenerate(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={async () => {
+                setConfirmRegenerate(false);
+                await loadScript({ regenerate: true });
+              }}
+              className="bg-accent text-accent-foreground hover:bg-accent/90"
+            >
+              <RotateCw className="mr-1.5 h-4 w-4" />
+              Regenerate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

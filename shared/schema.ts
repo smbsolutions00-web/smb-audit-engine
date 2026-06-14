@@ -23,8 +23,38 @@ export const audits = sqliteTable("audits", {
   voiceoverScript: text("voiceover_script"),
   errorMessage: text("error_message"),
   delivered: integer("delivered").notNull().default(0), // 0 = ready, 1 = delivered
+  /**
+   * Edited ElevenLabs DJ #2 script. When present, the elevenlabs-script endpoint
+   * returns this verbatim instead of regenerating. Cleared when the user clicks
+   * Regenerate so the next request rebuilds from the report + Manus PDF.
+   */
+  editedScript: text("edited_script"),
+  /**
+   * JSON array of audit events: `[{type, at, meta?}, ...]`. Used to render a
+   * timeline on the report and a recent activity badge on the dashboard card.
+   * Types: "created", "completed", "failed", "rerun", "manus_uploaded",
+   * "script_generated", "script_edited", "delivered", "marked_ready".
+   */
+  eventLog: text("event_log"),
   createdAt: integer("created_at").notNull(),
 });
+
+export type AuditEventType =
+  | "created"
+  | "completed"
+  | "failed"
+  | "rerun"
+  | "manus_uploaded"
+  | "script_generated"
+  | "script_edited"
+  | "delivered"
+  | "marked_ready";
+
+export interface AuditEvent {
+  type: AuditEventType;
+  at: number; // epoch ms
+  meta?: Record<string, unknown>;
+}
 
 export const insertAuditSchema = createInsertSchema(audits).omit({
   createdAt: true,

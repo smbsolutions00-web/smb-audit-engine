@@ -176,6 +176,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/audits/:id/delivered", async (req, res) => {
     const delivered = req.body?.delivered ? 1 : 0;
     await storage.updateAudit(req.params.id, { delivered } as Partial<InsertAudit>);
+    await storage.appendEvent(req.params.id, delivered ? "delivered" : "marked_ready");
     res.json({ ok: true, delivered: !!delivered });
   });
 
@@ -189,6 +190,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       vendastaData: audit.vendastaData ? JSON.parse(audit.vendastaData) : null,
       keysearchData: audit.keysearchData ? JSON.parse(audit.keysearchData) : null,
       reportData: audit.reportData ? (JSON.parse(audit.reportData) as ReportData) : null,
+      eventLog: audit.eventLog ? JSON.parse(audit.eventLog) : [],
+      hasEditedScript: !!audit.editedScript,
     });
   });
 
@@ -269,6 +272,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "processing",
       errorMessage: null as unknown as string,
     });
+    await storage.appendEvent(req.params.id, "rerun");
 
     retryAudit(req.params.id).catch(async (err) => {
       console.error("Audit retry error:", err);
@@ -276,6 +280,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         status: "failed",
         errorMessage: err?.message || String(err),
       });
+      await storage.appendEvent(req.params.id, "failed", { error: err?.message || String(err) });
     });
 
     res.status(202).json({ id: req.params.id });
@@ -547,6 +552,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateAudit(req.params.id, {
           intakeData: JSON.stringify(intake),
         });
+        await storage.appendEvent(req.params.id, "manus_uploaded", {
+          format,
+          sizeBytes: file.size,
+        });
 
         res.json({
           status: "received",
@@ -575,6 +584,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
+      // Query flags:
+      //   ?format=json   -> return { script, edited, generatedAt } for the editor
+      //   ?format=download (default) -> download as a .txt attachment
+      //   ?regenerate=1  -> ignore any saved editedScript and rebuild from the PDF
+      const wantsJson = req.query.format === "json";
+      const forceRegenerate = req.query.regenerate === "1";
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      const filename = `${slug}-elevenlabs-dj2-script.txt`;
+
+      // If we have a saved edited script and the caller is NOT forcing a
+      // regeneration, serve it verbatim. This is the path the View/Edit modal
+      // uses on subsequent opens, and it's also what Download uses by default.
+      if (audit.editedScript && !forceRegenerate) {
+        if (wantsJson) {
+          return res.json({
+            script: audit.editedScript,
+            edited: true,
+            filename,
+          });
+        }
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        return res.send(audit.editedScript);
+      }
+
       // Pass the structured report into the narration so the model can:
       //   - Use the Brand → Local → National keyword tiers we already classified.
       //   - Honor the live-Google validation block (reviews, GBP, social) and
@@ -601,19 +638,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // slide boundaries so it's easy to paste into ElevenLabs.
       const script = chunkScriptForElevenLabs(rawScript, 5000);
 
-      const slug = (audit.clientName || "audit")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "") || "audit";
+      await storage.appendEvent(req.params.id, "script_generated", {
+        regenerated: forceRegenerate,
+        chars: script.length,
+      });
+
+      if (wantsJson) {
+        return res.json({ script, edited: false, filename });
+      }
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${slug}-elevenlabs-dj2-script.txt"`,
-      );
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.send(script);
     } catch (err: any) {
       console.error("elevenlabs-script error:", err);
       res.status(500).json({ message: err?.message || "Script generation failed" });
+    }
+  });
+
+  /* Save edits to the ElevenLabs script. The saved version is what the next
+     download / View opens with until the user explicitly regenerates. */
+  app.put("/api/audits/:id/elevenlabs-script", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const script = typeof req.body?.script === "string" ? req.body.script : "";
+      if (!script.trim()) {
+        return res.status(400).json({ message: "Script body cannot be empty." });
+      }
+      // 200k char ceiling so we don't accept abusive payloads. Real scripts are
+      // typically 8-15k characters.
+      if (script.length > 200_000) {
+        return res.status(413).json({ message: "Script is too large (max 200,000 chars)." });
+      }
+      await storage.updateAudit(req.params.id, {
+        editedScript: script,
+      } as Partial<InsertAudit>);
+      await storage.appendEvent(req.params.id, "script_edited", { chars: script.length });
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("elevenlabs-script PUT error:", err);
+      res.status(500).json({ message: err?.message || "Save failed" });
+    }
+  });
+
+  /* Clear the saved edited script so the next GET regenerates from the PDF. */
+  app.delete("/api/audits/:id/elevenlabs-script", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      await storage.updateAudit(req.params.id, {
+        editedScript: null as unknown as string,
+      } as Partial<InsertAudit>);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("elevenlabs-script DELETE error:", err);
+      res.status(500).json({ message: err?.message || "Reset failed" });
     }
   });
 
@@ -694,6 +773,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           clientWebsite: website,
           status: "processing",
         });
+        await storage.appendEvent(id, "created", { clientName, website });
 
         // Kick off async processing — fire and forget
         processAudit(id, {
@@ -710,6 +790,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             status: "failed",
             errorMessage: err?.message || String(err),
           });
+          await storage.appendEvent(id, "failed", { error: err?.message || String(err) });
         });
 
         res.status(202).json({ id });
@@ -798,6 +879,7 @@ async function processAudit(
     overallScore: report.overallScore,
     status: "complete",
   });
+  await storage.appendEvent(id, "completed", { grade: report.overallGrade, score: report.overallScore });
 }
 
 /** Type-narrowing helper so TS is happy when checking that vendastaData exists. */
@@ -826,4 +908,5 @@ async function retryAudit(id: string) {
     status: "complete",
     errorMessage: null as unknown as string,
   });
+  await storage.appendEvent(id, "completed", { grade: report.overallGrade, score: report.overallScore });
 }
