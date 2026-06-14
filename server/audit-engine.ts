@@ -1068,16 +1068,16 @@ Return ONLY the JSON object.`;
 
         // Always lead the summary with the verified facts, then keep any
         // legitimate (non-contradicting) coaching the LLM already wrote.
+        // Match plain "no reviews" / "zero reviews" AND multi-platform variants
+        // like "Zero Google reviews, zero Yelp reviews, zero Facebook reviews".
+        // The (?:\w+\s+){0,4} allows up to 4 words (platform names, commas) between
+        // the negation word and "reviews".
+        const badClaimRe = /(no\s+verified\s+online\s+reviews|(?:no|zero)\s+(?:\w+[,\s]+){0,4}reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)/i;
         const stripBadClaims = (arr?: string[]) =>
-          (arr || []).filter(
-            (g) =>
-              !/(no\s+verified\s+online\s+reviews|no\s+reviews|zero\s+reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)/i.test(
-                g,
-              ),
-          );
+          (arr || []).filter((g) => !badClaimRe.test(g));
         const stripBadSummary = (s?: string) =>
           (s || "").replace(
-            /[^.!?]*\b(no\s+verified\s+online\s+reviews|zero\s+(verified\s+)?(online\s+)?reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)[^.!?]*[.!?]/gi,
+            /[^.!?]*\b(no\s+verified\s+online\s+reviews|(?:no|zero)\s+(?:\w+[,\s]+){0,4}reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)[^.!?]*[.!?]/gi,
             "",
           ).replace(/\s{2,}/g, " ").trim();
         parsed.pillars.reputation.summary = (verifiedFacts + " " + stripBadSummary(parsed.pillars.reputation.summary)).trim();
