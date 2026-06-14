@@ -225,14 +225,14 @@ function buildKeywordTiersBlock(report: any): string {
   const national = uniq.filter((r) => r.tier === "national").slice(0, 5);
 
   const lines: string[] = ["=== KEYWORD STORY ARC (use these tiers in order on any keyword slide) ==="];
-  lines.push("BRAND tier (ranking for the business's own name; limited reach):");
+  lines.push("BRAND tier (ranking for the business's OWN NAME; only captures customers who already know the brand, brings in NO new buyers):");
   if (brand.length === 0) lines.push("  (none yet)");
   else brand.forEach((r) => lines.push(`  - ${fmt(r)}`));
-  lines.push("LOCAL high-intent tier (real opportunity, people searching with intent in the city/metro):");
-  if (local.length === 0) lines.push("  (none yet, frame as a future opportunity)");
+  lines.push("TRUE-INTENT / LOCAL tier (the REAL OPPORTUNITY; people in the city/metro who do not know the brand yet but are searching the SOLUTION with buyer intent):");
+  if (local.length === 0) lines.push("  (none yet, frame as 'the exact gap we will close in 90 days')");
   else local.forEach((r) => lines.push(`  - ${fmt(r)}`));
-  lines.push("NATIONAL tier (long-term reach, broad volume):");
-  if (national.length === 0) lines.push("  (none yet, frame as a long-term horizon)");
+  lines.push("NATIONAL tier (long-horizon scale once authority builds):");
+  if (national.length === 0) lines.push("  (none yet, frame as 'we will revisit once local foundation is solid')");
   else national.forEach((r) => lines.push(`  - ${fmt(r)}`));
   lines.push("");
   return lines.join("\n");
@@ -291,7 +291,7 @@ export async function generateElevenLabsScript(
     "7. Ground every slide narration in the actual content visible on that slide. Do not invent grades, scores, or numbers that aren't present.",
     "8. Plain English only - explain anything technical with one short analogy.",
     "9. CREDIBILITY OVERRIDE (most important rule). If a VERIFIED FACTS block is supplied below, those facts come from a live Google search and are CORRECT. Slides may contradict them (the slides are built from older snapshot data). When that happens you MUST trust the verified facts and silently correct the narration. Examples: if the slide says 'No Google Business Profile' but verified facts say there are 15 reviews at 5.0 stars, do NOT echo the slide; speak to the strength of the existing reviews and the opportunity to grow on top of them. If the slide says 'no Facebook' but verified facts confirm a Facebook profile, acknowledge it as a foundation to build on. Never invent a number; only use verified numbers when correcting.",
-    "10. KEYWORD STORY ARC (when keyword tiers are supplied). On any slide that covers SEO keywords, walk the listener through the data in a clear arc:\n   - FIRST the BRAND tier: 'Yes, the business is ranking for its own name and a few brand variants. That is expected; only people who already know the brand are searching for it.'\n   - SECOND the LOCAL tier (the real opportunity): 'Here is where the bigger play is. These are people in the local area searching with intent for the solution the business provides, without knowing the brand exists yet. For example, [pick one or two of the local keywords with their volume numbers] are looking for this every month.'\n   - THIRD the NATIONAL tier (long-term reach): 'And there is a longer horizon play. These are the larger national volume terms (mention 1-2 examples). Once authority grows, this is where real scale shows up.'\n   If a tier is empty (e.g. no national keywords yet), acknowledge it briefly as a future opportunity rather than skipping silently. Always use the actual numbers from the data block, not invented ones.",
+    "10. KEYWORD STORY ARC (when keyword tiers are supplied). On any slide that covers SEO keywords, frame the data as 'BRAND ranking vs. TRUE-INTENT ranking' and walk the listener through it in this exact order:\n   - FIRST: BRAND tier. Acknowledge it honestly and then minimize its weight. Sample framing: 'Right now the business is ranking for its own name and a couple of brand variants. That is good, it means people who already know the brand can find it. But ranking for your own name only captures the customers you already have. It does NOT bring in anyone new.'\n   - SECOND: TRUE-INTENT tier (the LOCAL keywords; THIS IS THE BIG PLAY). Sample framing: 'The real opportunity is ranking for true buyer intent. These are the people in {CITY/METRO} who do not know the business exists yet, but are actively searching for the solution it provides, today. For example, [name 1 or 2 specific local keywords with their volume numbers]. Every one of those searches is a customer waiting to be found. That is where new revenue actually comes from.'\n   - THIRD: NATIONAL tier (long-term reach). Sample framing: 'And then there is the long-horizon layer, the broader national terms (mention 1-2 examples). As authority builds, this is where scale shows up. We do not chase this yet, but we are positioning to capture it.'\n   If the LOCAL tier is empty, frame it as 'this is exactly the gap we will close in the first 90 days'. If NATIONAL is empty, frame it as 'we will revisit national reach once the local foundation is solid'. Always use actual numbers from the data block, never invented ones. Always lead with brand-vs-true-intent contrast on any keyword slide; this is the single most important narrative beat.",
     "11. Output the script as plain text exactly the way it should be pasted into ElevenLabs.",
   ].join("\n");
 

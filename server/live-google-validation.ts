@@ -28,6 +28,7 @@ import { dataForSeoAuthHeader, isDataForSeoEnabled } from "./lib/dataforseo-auth
 
 const DFS_BASE = "https://api.dataforseo.com";
 const DFS_SERP_ENDPOINT = "/v3/serp/google/organic/live/advanced";
+const DFS_MAPS_ENDPOINT = "/v3/serp/google/maps/live/advanced";
 const SERPER_ENDPOINT = "https://google.serper.dev/search";
 const REQUEST_TIMEOUT_MS = 25_000;
 
@@ -167,6 +168,106 @@ async function dfsSerpQuery(query: string, locationName?: string): Promise<DfsSe
   }
 }
 
+/**
+ * Google Maps SERP lookup via DataForSEO. Returns the best-matching local-pack
+ * result as a GoogleBusinessProfile.
+ *
+ * Why Maps and not just organic SERP? The /serp/google/organic endpoint exposes
+ * a knowledge_graph item that is often the website (with no rating/reviews
+ * fields populated) for e-commerce / supplement brands. The Maps endpoint
+ * returns local-business items with reliable rating + rating.votes_count.
+ *
+ * Match strategy: case-insensitive title contains business name. If multiple
+ * results match, prefer the one with the most reviews (more established).
+ */
+async function dfsMapsQuery(
+  query: string,
+  locationName: string | undefined,
+  businessName: string,
+): Promise<GoogleBusinessProfile | null> {
+  if (!isDataForSeoEnabled()) return null;
+  const body = [
+    {
+      keyword: query,
+      language_code: "en",
+      location_name: locationName || "United States",
+      depth: 20,
+    },
+  ];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${DFS_BASE}${DFS_MAPS_ENDPOINT}`, {
+      method: "POST",
+      headers: {
+        Authorization: dataForSeoAuthHeader(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[live-validation] DataForSEO Maps returned ${res.status} for "${query}"`);
+      return null;
+    }
+    const json: any = await res.json();
+    const task = json?.tasks?.[0];
+    if (!task || (task.status_code && task.status_code >= 40000)) {
+      console.warn(`[live-validation] DataForSEO Maps task error: ${task?.status_message}`);
+      return null;
+    }
+    const items: any[] = task.result?.[0]?.items || [];
+    if (items.length === 0) {
+      console.log(`[live-validation] Maps returned 0 items for "${query}"`);
+      return null;
+    }
+    // Find best matching business by title (case-insensitive contains). Compare
+    // on normalized strings (strip non-alphanum) so "FiorinaBeauty" matches
+    // "Fiorina Beauty" or "Fiorina Beauty LLC".
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const bn = norm(businessName);
+    const matches = items.filter((it) => {
+      const title = it?.title || it?.name;
+      if (typeof title !== "string") return false;
+      return norm(title).includes(bn);
+    });
+    // If no title match, the first result is the best guess (Google's top pick).
+    const candidates = matches.length > 0 ? matches : items.slice(0, 1);
+    // Prefer the candidate with the most votes (most established listing).
+    const best = candidates.sort((a, b) => {
+      const av = a?.rating?.votes_count ?? a?.votes_count ?? 0;
+      const bv = b?.rating?.votes_count ?? b?.votes_count ?? 0;
+      return bv - av;
+    })[0];
+    if (!best) return null;
+    const rating = typeof best.rating?.value === "number" ? best.rating.value : null;
+    const reviewCount =
+      typeof best.rating?.votes_count === "number"
+        ? best.rating.votes_count
+        : typeof best.votes_count === "number"
+          ? best.votes_count
+          : null;
+    console.log(
+      `[live-validation] Maps best match: title="${best?.title || best?.name}" rating=${rating} reviews=${reviewCount}`,
+    );
+    return {
+      present: true,
+      rating,
+      reviewCount,
+      phone: best.phone || null,
+      address: best.address || best.address_info?.address || null,
+      hours: null,
+      reviewsUrl: best.url || null,
+      source: "dataforseo",
+    };
+  } catch (err: any) {
+    console.warn(`[live-validation] DataForSEO Maps failed for "${query}":`, err?.message || err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function parseGbpFromDfs(items: DfsSerpItem[]): GoogleBusinessProfile | null {
   // DataForSEO returns the knowledge panel as items with type === "knowledge_graph".
   // Some accounts get nested structures, so we flatten one level deep.
@@ -283,6 +384,8 @@ export interface ValidateInput {
   city?: string;
   state?: string;
   website?: string;
+  /** Street address from intake. Highly disambiguating for the Maps lookup. */
+  address?: string;
 }
 
 /**
@@ -319,13 +422,41 @@ export async function validateBusinessLive(input: ValidateInput): Promise<LiveVa
   let gbp: GoogleBusinessProfile = EMPTY_GBP;
   let allItems: { url?: string; link?: string }[] = [];
 
-  // 1) DataForSEO primary
+  // 1a) DataForSEO Google Maps lookup - the most reliable source of GBP review
+  // count. The Maps SERP returns local-pack results with rating + votes_count
+  // even when the knowledge_graph item is just the website (no review fields).
+  // Try address-first if we have one (very disambiguating), else name + city.
+  const mapsQuery = input.address
+    ? `${businessName} ${input.address}`
+    : locationParts
+      ? `${businessName} ${locationParts}`
+      : businessName;
+  const mapsGbp = await dfsMapsQuery(mapsQuery, locationName, businessName);
+  if (mapsGbp) {
+    gbp = mapsGbp;
+    provider = "dataforseo";
+    console.log(`[live-validation] Maps hit: rating=${mapsGbp.rating} reviews=${mapsGbp.reviewCount}`);
+  }
+
+  // 1b) DataForSEO organic SERP - used for social discovery and as a knowledge
+  // graph fallback if Maps came back empty.
   const dfsItems = await dfsSerpQuery(brandQuery, locationName);
   if (dfsItems && dfsItems.length > 0) {
-    const parsed = parseGbpFromDfs(dfsItems);
-    if (parsed) {
-      gbp = parsed;
-      provider = "dataforseo";
+    if (!gbp.present) {
+      const parsed = parseGbpFromDfs(dfsItems);
+      if (parsed) {
+        gbp = parsed;
+        provider = "dataforseo";
+      }
+    } else {
+      // Maps gave us GBP. Backfill phone / address / reviewsUrl from the
+      // organic knowledge panel if Maps did not provide them.
+      const parsed = parseGbpFromDfs(dfsItems);
+      if (parsed) {
+        if (!gbp.phone && parsed.phone) gbp.phone = parsed.phone;
+        if (!gbp.address && parsed.address) gbp.address = parsed.address;
+        if (!gbp.reviewsUrl && parsed.reviewsUrl) gbp.reviewsUrl = parsed.reviewsUrl;
+      }
     }
     allItems = dfsItems.map((i) => ({ url: i.url }));
   }

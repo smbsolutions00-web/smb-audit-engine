@@ -75,6 +75,15 @@ let _client: Anthropic | null = null;
 export function isLLMAvailable(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY) || _client !== null;
 }
+
+/** Convert a 0-100 score to a letter grade matching the report's scale. */
+function scoreToGrade(score: number): Grade {
+  if (score >= 90) return "A" as Grade;
+  if (score >= 80) return "B" as Grade;
+  if (score >= 70) return "C" as Grade;
+  if (score >= 60) return "D" as Grade;
+  return "F" as Grade;
+}
 function getClient(): Anthropic {
   if (_client) return _client;
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -842,6 +851,7 @@ Return ONLY the JSON object.`;
         city: intake.city,
         state: intake.state,
         website,
+        address: intake.address,
       }).catch((err) => {
         console.warn("[generateReport] live validation failed:", err?.message || err);
         return null;
@@ -943,29 +953,60 @@ Return ONLY the JSON object.`;
         provider: live.provider,
       };
 
-      // Override the Reputation pillar copy when live shows reviews exist.
-      // We replace the false "no reviews" framing with a faithful summary
-      // while keeping any legitimate gaps the LLM identified.
-      if (live.gbp.reviewCount && live.gbp.reviewCount > 0 && parsed.pillars?.reputation) {
-        const verifiedLine =
-          `Verified via live Google search on ${new Date().toISOString().slice(0, 10)}: ` +
-          `Google Business Profile is active with ${live.gbp.reviewCount} review${live.gbp.reviewCount === 1 ? "" : "s"}` +
-          (live.gbp.rating ? ` at ${live.gbp.rating} stars.` : ".");
-        parsed.pillars.reputation.summary = verifiedLine + " " +
-          (parsed.pillars.reputation.summary || "");
-        // Remove any "no reviews" / "no GBP" claims from gaps and strengths.
+      // Override the Reputation pillar copy whenever live confirms a GBP
+      // exists. Even if reviewCount is null/0 (rare for established
+      // businesses), the LLM's "no Google Business Profile" framing is still
+      // false and would tank credibility. We rewrite the summary from scratch
+      // using verified facts and prune any contradicting gaps/strengths.
+      if (live.gbp.present && parsed.pillars?.reputation) {
+        const rc = live.gbp.reviewCount ?? 0;
+        const rt = live.gbp.rating ?? null;
+        const today = new Date().toISOString().slice(0, 10);
+        const verifiedFacts =
+          rc > 0
+            ? `Verified via live Google search on ${today}: Google Business Profile is active with ${rc} review${rc === 1 ? "" : "s"}${rt ? ` at ${rt} stars` : ""}.`
+            : `Verified via live Google search on ${today}: Google Business Profile is active${rt ? ` (${rt} stars)` : ""}.`;
+
+        // Always lead the summary with the verified facts, then keep any
+        // legitimate (non-contradicting) coaching the LLM already wrote.
         const stripBadClaims = (arr?: string[]) =>
           (arr || []).filter(
             (g) =>
-              !/no\s+reviews|zero\s+reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business/i.test(
+              !/(no\s+verified\s+online\s+reviews|no\s+reviews|zero\s+reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)/i.test(
                 g,
               ),
           );
+        const stripBadSummary = (s?: string) =>
+          (s || "").replace(
+            /[^.!?]*\b(no\s+verified\s+online\s+reviews|zero\s+(verified\s+)?(online\s+)?reviews|no\s+google\s+business\s+profile|no\s+gbp|missing\s+google\s+business|no\s+average\s+rating|invisible\s+from\s+a\s+social\s+proof|will\s+find\s+nothing|suppresses\s+purchasing|no\s+star\s+rating)[^.!?]*[.!?]/gi,
+            "",
+          ).replace(/\s{2,}/g, " ").trim();
+        parsed.pillars.reputation.summary = (verifiedFacts + " " + stripBadSummary(parsed.pillars.reputation.summary)).trim();
         parsed.pillars.reputation.gaps = stripBadClaims(parsed.pillars.reputation.gaps);
+        const strengthLine =
+          rc > 0
+            ? `Active Google Business Profile with ${rc} review${rc === 1 ? "" : "s"}${rt ? ` at ${rt} stars` : ""}.`
+            : `Active Google Business Profile${rt ? ` rated ${rt} stars` : ""} (foundation already in place).`;
         parsed.pillars.reputation.strengths = [
-          `Active Google Business Profile with ${live.gbp.reviewCount} review${live.gbp.reviewCount === 1 ? "" : "s"}${live.gbp.rating ? ` at ${live.gbp.rating} stars` : ""}.`,
+          strengthLine,
           ...stripBadClaims(parsed.pillars.reputation.strengths),
         ];
+        // If review count is healthy, soft-boost the reputation score so the
+        // grade reflects reality. Cap at 75 so meaningful response-rate /
+        // platform-coverage gaps still pull the grade down.
+        if (rc >= 10 && typeof parsed.pillars.reputation.score === "number" && parsed.pillars.reputation.score < 60) {
+          parsed.pillars.reputation.score = Math.min(75, 50 + Math.min(25, rc));
+          parsed.pillars.reputation.grade = scoreToGrade(parsed.pillars.reputation.score);
+        }
+        // Backfill at least one constructive gap if we stripped everything,
+        // so the section still gives the user something to act on.
+        if ((parsed.pillars.reputation.gaps || []).length === 0) {
+          parsed.pillars.reputation.gaps = [
+            "No documented review-request automation in place to consistently grow review count month over month.",
+            "No public review response workflow established (every new review should get a branded reply within 48 hours).",
+            "Review presence is concentrated on Google only; Yelp / Trustpilot / Facebook coverage would broaden discovery.",
+          ];
+        }
       }
 
       // Override the listings array: if Google says GBP exists, mark it Listed.
