@@ -85,22 +85,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       template_uid: "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08",
       model: "nano-banana",
     });
+    // Use known task IDs from the prior probe call to inspect task.detail shape.
+    // We need to see how completed deliverables (slide images, PDF) are surfaced.
+    const knownTaskIds = [
+      "6MpGT63OgmPQ5ws4i5iaPB",   // "Simplified Audit Report Overview..." from list
+      "NEnY89mJAC8jUd7gF8mWQB",   // template probe task
+      "2eueQZ3Hwheka7sMYGigSq",   // minimal probe task
+    ];
     const tries: Try[] = [
-      // GET routes from v2 RPC-style namespace
-      { name: "v2-task.list xManusKey",   method: "GET",  url: "https://api.manus.ai/v2/task.list", headers: HK },
-      { name: "v2-task.list Bearer",     method: "GET",  url: "https://api.manus.ai/v2/task.list", headers: HB },
-      // POST task.create with minimal valid body, both auth schemes
-      { name: "v2-task.create xManusKey minimal", method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HK, body: minimalMessage },
-      { name: "v2-task.create Bearer minimal",    method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HB, body: minimalMessage },
-      // POST task.create with template_uid + nano-banana model
-      { name: "v2-task.create xManusKey template", method: "POST", url: "https://api.manus.ai/v2/task.create", headers: HK, body: templateMessage },
+      // FULL list response (no snippet truncation needed downstream)
+      { name: "v2-task.list full", method: "GET", url: "https://api.manus.ai/v2/task.list?limit=3", headers: HK },
+      // task.detail variants - try query param and POST body styles
+      ...knownTaskIds.flatMap((id) => [
+        { name: `v2-task.detail?id=${id.slice(0, 6)} GET`, method: "GET", url: `https://api.manus.ai/v2/task.detail?id=${id}`, headers: HK },
+        { name: `v2-task.detail?task_id=${id.slice(0, 6)} GET`, method: "GET", url: `https://api.manus.ai/v2/task.detail?task_id=${id}`, headers: HK },
+        { name: `v2-task.detail?taskId=${id.slice(0, 6)} GET`, method: "GET", url: `https://api.manus.ai/v2/task.detail?taskId=${id}`, headers: HK },
+        { name: `v2-task.detail POST id=${id.slice(0, 6)}`, method: "POST", url: `https://api.manus.ai/v2/task.detail`, headers: HK, body: JSON.stringify({ id }) },
+        { name: `v2-task.detail POST task_id=${id.slice(0, 6)}`, method: "POST", url: `https://api.manus.ai/v2/task.detail`, headers: HK, body: JSON.stringify({ task_id: id }) },
+      ]),
+      // also try task.listMessages on the most-likely-completed task
+      { name: "v2-task.listMessages POST 6MpG", method: "POST", url: "https://api.manus.ai/v2/task.listMessages", headers: HK, body: JSON.stringify({ task_id: "6MpGT63OgmPQ5ws4i5iaPB" }) },
+      { name: "v2-task.listMessages GET 6MpG", method: "GET", url: "https://api.manus.ai/v2/task.listMessages?task_id=6MpGT63OgmPQ5ws4i5iaPB", headers: HK },
     ];
     const results: any[] = [];
     for (const t of tries) {
       try {
         const r = await fetch(t.url, { method: t.method, headers: t.headers, body: t.body });
         const text = await r.text();
-        results.push({ name: t.name, status: r.status, bodySnippet: text.slice(0, 400) });
+        results.push({ name: t.name, status: r.status, bodySnippet: text.slice(0, 1500) });
       } catch (err: any) {
         results.push({ name: t.name, error: err?.message || String(err) });
       }
