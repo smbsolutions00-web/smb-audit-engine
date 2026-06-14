@@ -76,6 +76,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  /* Raw DataForSEO probe — bypasses parsing so we can see exactly which
+     item types, fields, and shapes the API returns. */
+  app.get("/api/debug/dfs-raw", async (req, res) => {
+    const keyword = String(req.query.q || "").trim();
+    const endpoint = String(req.query.ep || "maps"); // maps | organic
+    const location = String(req.query.loc || "United States");
+    if (!keyword) return res.status(400).json({ error: "missing ?q=" });
+    const login = (process.env.DATAFORSEO_LOGIN || "").trim().replace(/^\uFEFF/, "");
+    const pw = (process.env.DATAFORSEO_PASSWORD || "").trim().replace(/^\uFEFF/, "");
+    if (!login || !pw) return res.status(500).json({ error: "no DFS creds" });
+    const auth = Buffer.from(`${login}:${pw}`, "utf8").toString("base64");
+    const path =
+      endpoint === "organic"
+        ? "/v3/serp/google/organic/live/advanced"
+        : "/v3/serp/google/maps/live/advanced";
+    try {
+      const r = await fetch(`https://api.dataforseo.com${path}`, {
+        method: "POST",
+        headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+        body: JSON.stringify([{ keyword, language_code: "en", location_name: location, depth: 20 }]),
+      });
+      const status = r.status;
+      const json: any = await r.json().catch(() => ({}));
+      const task = json?.tasks?.[0];
+      const items: any[] = task?.result?.[0]?.items || [];
+      res.json({
+        httpStatus: status,
+        apiStatusCode: task?.status_code ?? json?.status_code,
+        apiStatusMessage: task?.status_message ?? json?.status_message,
+        itemTypes: items.map((i) => i?.type),
+        itemCount: items.length,
+        firstFiveItems: items.slice(0, 5).map((i) => ({
+          type: i?.type,
+          title: i?.title || i?.name,
+          rating: i?.rating,
+          reviews_count: i?.reviews_count,
+          votes_count: i?.votes_count,
+          phone: i?.phone,
+          address: i?.address || i?.address_info?.address,
+          url: i?.url,
+          domain: i?.domain,
+          keys: Object.keys(i || {}),
+        })),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
+  });
+
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
   registerAuthRoutes(app);
 
@@ -85,6 +134,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const publicPaths = new Set([
       "/health",
       "/debug/validate",
+      "/debug/dfs-raw",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
