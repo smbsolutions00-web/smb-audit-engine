@@ -56,111 +56,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  /* Temporary public debug endpoint for live Google validation. Lets us
-     inspect exactly what DataForSEO Maps + organic returns for a given
-     business so we can diagnose hallucinated reputation sections. */
-  app.get("/api/debug/validate", async (req, res) => {
-    try {
-      const { validateBusinessLive } = await import("./live-google-validation");
-      const businessName = String(req.query.name || "").trim();
-      if (!businessName) return res.status(400).json({ error: "missing ?name=" });
-      const result = await validateBusinessLive({
-        businessName,
-        city: req.query.city ? String(req.query.city) : undefined,
-        state: req.query.state ? String(req.query.state) : undefined,
-        address: req.query.address ? String(req.query.address) : undefined,
-      });
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || String(err) });
-    }
-  });
-
-  /* Raw Serper.dev probe so we can see exactly what knowledgeGraph fields are
-     populated for a given business. */
-  app.get("/api/debug/serper-raw", async (req, res) => {
-    const q = String(req.query.q || "").trim();
-    const ep = String(req.query.ep || "search"); // search | places | maps
-    if (!q) return res.status(400).json({ error: "missing ?q=" });
-    const key = (process.env.SERPER_API_KEY || "").trim();
-    if (!key) return res.status(500).json({ error: "no SERPER_API_KEY in env" });
-    const url =
-      ep === "places"
-        ? "https://google.serper.dev/places"
-        : ep === "maps"
-          ? "https://google.serper.dev/maps"
-          : "https://google.serper.dev/search";
-    try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "X-API-KEY": key, "Content-Type": "application/json" },
-        body: JSON.stringify({ q, num: 10 }),
-      });
-      const status = r.status;
-      const json: any = await r.json().catch(() => ({}));
-      res.json({
-        endpoint: ep,
-        httpStatus: status,
-        hasKnowledgeGraph: !!json?.knowledgeGraph,
-        knowledgeGraph: json?.knowledgeGraph || null,
-        organicTitles: (json?.organic || []).slice(0, 5).map((o: any) => ({ title: o.title, link: o.link })),
-        placesCount: (json?.places || []).length,
-        firstPlaces: (json?.places || []).slice(0, 5),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || String(err) });
-    }
-  });
-
-  /* Raw DataForSEO probe — bypasses parsing so we can see exactly which
-     item types, fields, and shapes the API returns. */
-  app.get("/api/debug/dfs-raw", async (req, res) => {
-    const keyword = String(req.query.q || "").trim();
-    const endpoint = String(req.query.ep || "maps"); // maps | organic
-    const location = String(req.query.loc || "United States");
-    if (!keyword) return res.status(400).json({ error: "missing ?q=" });
-    const login = (process.env.DATAFORSEO_LOGIN || "").trim().replace(/^\uFEFF/, "");
-    const pw = (process.env.DATAFORSEO_PASSWORD || "").trim().replace(/^\uFEFF/, "");
-    if (!login || !pw) return res.status(500).json({ error: "no DFS creds" });
-    const auth = Buffer.from(`${login}:${pw}`, "utf8").toString("base64");
-    const path =
-      endpoint === "organic"
-        ? "/v3/serp/google/organic/live/advanced"
-        : "/v3/serp/google/maps/live/advanced";
-    try {
-      const r = await fetch(`https://api.dataforseo.com${path}`, {
-        method: "POST",
-        headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-        body: JSON.stringify([{ keyword, language_code: "en", location_name: location, depth: 20 }]),
-      });
-      const status = r.status;
-      const json: any = await r.json().catch(() => ({}));
-      const task = json?.tasks?.[0];
-      const items: any[] = task?.result?.[0]?.items || [];
-      res.json({
-        httpStatus: status,
-        apiStatusCode: task?.status_code ?? json?.status_code,
-        apiStatusMessage: task?.status_message ?? json?.status_message,
-        itemTypes: items.map((i) => i?.type),
-        itemCount: items.length,
-        firstFiveItems: items.slice(0, 5).map((i) => ({
-          type: i?.type,
-          title: i?.title || i?.name,
-          rating: i?.rating,
-          reviews_count: i?.reviews_count,
-          votes_count: i?.votes_count,
-          phone: i?.phone,
-          address: i?.address || i?.address_info?.address,
-          url: i?.url,
-          domain: i?.domain,
-          keys: Object.keys(i || {}),
-        })),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || String(err) });
-    }
-  });
-
   /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
   registerAuthRoutes(app);
 
@@ -169,9 +64,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", (req, res, next) => {
     const publicPaths = new Set([
       "/health",
-      "/debug/validate",
-      "/debug/dfs-raw",
-      "/debug/serper-raw",
       "/auth/me",
       "/auth/request-link",
       "/auth/verify",
