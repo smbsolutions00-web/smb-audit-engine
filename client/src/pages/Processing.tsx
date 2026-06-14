@@ -82,7 +82,7 @@ export default function Processing() {
           <AlertCircle className="mx-auto h-10 w-10 text-destructive" />
           <h2 className="text-lg font-semibold">Audit failed to generate</h2>
           <p className="text-sm text-muted-foreground">
-            {data?.errorMessage || "Something went wrong while processing the documents. Try again — if it persists, double-check the PDFs are valid."}
+            {data?.errorMessage || "Something went wrong while processing the documents. Try again. If it persists, double-check the PDFs are valid."}
           </p>
           <div className="flex justify-center gap-2">
             <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-back-dashboard">

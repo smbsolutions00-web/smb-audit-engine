@@ -58,7 +58,8 @@ export type AuditEventType =
   | "script_generated"
   | "script_edited"
   | "delivered"
-  | "marked_ready";
+  | "marked_ready"
+  | "self_healed";
 
 export interface AuditEvent {
   type: AuditEventType;

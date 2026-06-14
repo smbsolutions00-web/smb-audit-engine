@@ -189,8 +189,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   /* Get single audit (full payload) */
   app.get("/api/audits/:id", async (req, res) => {
-    const audit = await storage.getAudit(req.params.id);
+    let audit = await storage.getAudit(req.params.id);
     if (!audit) return res.status(404).json({ message: "Audit not found" });
+
+    /* Self-heal stuck audits: if a row is still flagged "processing" but the
+       worker has been silent for more than 10 minutes (e.g. killed by a Render
+       redeploy mid-run), flip it based on whether reportData exists. This keeps
+       clients from seeing an infinite spinner after a deploy interrupts work.
+       Staleness signal: the most recent event in eventLog (falls back to
+       createdAt) since the audits table has no updatedAt column. */
+    if (audit.status === "processing") {
+      let lastActivity = audit.createdAt || 0;
+      if (audit.eventLog) {
+        try {
+          const events = JSON.parse(audit.eventLog) as Array<{ at?: number }>;
+          if (Array.isArray(events) && events.length > 0) {
+            const latest = events.reduce((m, e) => Math.max(m, e.at || 0), 0);
+            if (latest > lastActivity) lastActivity = latest;
+          }
+        } catch { /* corrupt log, fall back to createdAt */ }
+      }
+      const stale = Date.now() - lastActivity > 10 * 60 * 1000;
+      if (stale) {
+        if (audit.reportData) {
+          await storage.updateAudit(req.params.id, { status: "complete" });
+          await storage.appendEvent(req.params.id, "self_healed", { to: "complete" });
+        } else {
+          await storage.updateAudit(req.params.id, {
+            status: "failed",
+            errorMessage: "The worker stopped before finishing. Please retry.",
+          });
+          await storage.appendEvent(req.params.id, "self_healed", { to: "failed" });
+        }
+        audit = await storage.getAudit(req.params.id);
+        if (!audit) return res.status(404).json({ message: "Audit not found" });
+      }
+    }
+
     res.json({
       ...audit,
       intakeData: audit.intakeData ? JSON.parse(audit.intakeData) : null,
@@ -271,7 +306,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!audit.intakeData || !vendastaData(audit)) {
       return res.status(400).json({
         message:
-          "Cannot retry — the original parsed data is missing. Please start a new audit and re-upload the documents.",
+          "Cannot retry. The original parsed data is missing. Please start a new audit and re-upload the documents.",
       });
     }
 
