@@ -77,20 +77,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
      an audit. Used by NewAudit.tsx to auto-fill the form fields the moment
      the intake PDF is dropped onto the dropzone. */
   app.post("/api/intake/preview", upload.single("intake"), async (req, res) => {
+    const t0 = Date.now();
     try {
       if (!req.file) {
+        console.warn("[intake-preview] no file in request");
         return res.status(400).json({ message: "Intake PDF is required." });
       }
+      console.log(`[intake-preview] received ${req.file.originalname} (${req.file.size} bytes)`);
       const intakeText = await parsePdfBuffer(req.file.buffer);
+      console.log(`[intake-preview] parsed PDF: ${intakeText.length} chars of text`);
+      if (!intakeText || intakeText.trim().length < 20) {
+        console.warn("[intake-preview] PDF parsed to empty/near-empty text — likely a scanned PDF without OCR");
+      }
       const intake = await extractIntake(intakeText);
-      // Run the geo enrichment in parallel as a best-effort.
+      console.log("[intake-preview] extractIntake result keys:", Object.keys(intake), {
+        ownerFirstName: intake.ownerFirstName,
+        clientName: intake.clientName,
+        website: intake.website,
+        city: intake.city,
+        state: intake.state,
+      });
+      // Run the geo enrichment as a best-effort.
       const geo = await enrichIntakeGeo({
         city: intake.city,
         state: intake.state,
         location: intake.location,
       });
       const merged = { ...intake, ...geo };
-      res.json({
+      const payload = {
         ownerFirstName: merged.ownerFirstName || null,
         contactName: merged.contactName || null,
         clientName: merged.clientName || null,
@@ -104,9 +118,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         metroArea: merged.metroArea || null,
         surroundingCities: merged.surroundingCities || [],
         industry: merged.industry || null,
-      });
+      };
+      console.log(`[intake-preview] done in ${Date.now() - t0}ms — returning:`, payload);
+      res.json(payload);
     } catch (err: any) {
-      console.error("[intake-preview]", err);
+      console.error("[intake-preview] ERROR:", err);
       res.status(500).json({ message: err?.message || "Failed to preview intake." });
     }
   });

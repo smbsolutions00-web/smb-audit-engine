@@ -70,35 +70,56 @@ export default function NewAudit() {
   useEffect(() => {
     if (!intake) return;
     let cancelled = false;
+    console.log("[intake-preview] file dropped, calling /api/intake/preview", {
+      name: intake.name,
+      size: intake.size,
+      type: intake.type,
+    });
     (async () => {
       setIntakePreviewing(true);
       try {
         const fd = new FormData();
         fd.append("intake", intake);
-        const res = await fetch(`${API}/api/intake/preview`, { method: "POST", body: fd });
+        const res = await fetch(`${API}/api/intake/preview`, {
+          method: "POST",
+          body: fd,
+          credentials: "include",
+        });
+        console.log("[intake-preview] response status", res.status);
         const data = await res.json().catch(() => ({}));
+        console.log("[intake-preview] response body", data);
         if (cancelled) return;
         if (!res.ok) {
           toast({
             variant: "destructive",
             title: "Couldn't read intake form",
-            description: data?.message || "Try a different PDF or fill the fields manually.",
+            description: data?.message || `Server returned ${res.status}. Try a different PDF or fill the fields manually.`,
           });
           return;
         }
         // Only fill fields the user hasn't already typed into.
-        if (data.ownerFirstName && !ownerFirstName.trim()) setOwnerFirstName(data.ownerFirstName);
-        if (data.clientName && !clientName.trim()) setClientName(data.clientName);
-        if (data.website && !website.trim()) setWebsite(data.website);
-        toast({
-          title: "Intake auto-filled",
-          description: [
-            data.ownerFirstName && `Owner: ${data.ownerFirstName}`,
-            data.clientName && `Business: ${data.clientName}`,
-            data.metroArea && `Metro: ${data.metroArea}`,
-          ].filter(Boolean).join(" \u00b7 ") || "Form fields populated from the intake PDF.",
-        });
+        let filled = 0;
+        if (data.ownerFirstName && !ownerFirstName.trim()) { setOwnerFirstName(data.ownerFirstName); filled++; }
+        if (data.clientName && !clientName.trim()) { setClientName(data.clientName); filled++; }
+        if (data.website && !website.trim()) { setWebsite(data.website); filled++; }
+        if (filled === 0) {
+          toast({
+            variant: "destructive",
+            title: "No fields detected",
+            description: "The intake PDF was readable but no owner, business, or website was found. Fill the fields manually.",
+          });
+        } else {
+          toast({
+            title: `Intake auto-filled (${filled} field${filled === 1 ? "" : "s"})`,
+            description: [
+              data.ownerFirstName && `Owner: ${data.ownerFirstName}`,
+              data.clientName && `Business: ${data.clientName}`,
+              data.metroArea && `Metro: ${data.metroArea}`,
+            ].filter(Boolean).join(" \u00b7 ") || "Form fields populated from the intake PDF.",
+          });
+        }
       } catch (err: any) {
+        console.error("[intake-preview] fetch failed", err);
         if (!cancelled) {
           toast({
             variant: "destructive",
@@ -272,15 +293,23 @@ export default function NewAudit() {
         </div>
 
         {/* Intake form */}
-        <FileDrop
-          label="Client Intake Form (PDF)"
-          required
-          file={intake}
-          onChange={setIntake}
-          accept="application/pdf"
-          testId="dropzone-intake"
-          description="The completed onboarding form your client filled out."
-        />
+        <div className="space-y-2">
+          <FileDrop
+            label="Client Intake Form (PDF)"
+            required
+            file={intake}
+            onChange={setIntake}
+            accept="application/pdf"
+            testId="dropzone-intake"
+            description="The completed onboarding form your client filled out."
+          />
+          {intakePreviewing && (
+            <div className="flex items-center gap-2 rounded-md border border-card-border bg-accent/10 px-3 py-2 text-xs text-accent" data-testid="intake-preview-status">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Reading intake form and auto-filling fields…
+            </div>
+          )}
+        </div>
 
         {/* SMB Solution Audit snapshot */}
         <FileDrop
