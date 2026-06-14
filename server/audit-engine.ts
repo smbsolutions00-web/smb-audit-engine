@@ -159,8 +159,71 @@ export interface IntakeData {
 import { firstNameOf } from "./lib/names";
 import { enrichKeywords, isGoogleAdsEnabled, type GeoCascade } from "./dataforseo-google-ads";
 
+/**
+ * Deterministic regex/heuristic fallback for the three critical auto-fill
+ * fields (website, email, business name). Runs BEFORE the LLM call so the
+ * LLM has hints, and AFTER the LLM call to back-fill anything the LLM missed.
+ * This is what saves us when the PDF is scanned, oddly formatted, or has
+ * labels the LLM doesn't recognize.
+ */
+function extractIntakeHeuristics(pdfText: string): Partial<IntakeData> {
+  const out: Partial<IntakeData> = {};
+  if (!pdfText) return out;
+  const text = pdfText.replace(/\r/g, "");
+
+  // ---- Email ----
+  const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  if (emailMatch) out.email = emailMatch[0];
+
+  // ---- Website (URL or bare domain on a "Website:" line) ----
+  // First try a labeled line so we don't grab the email's domain.
+  const labeledUrl = text.match(/(?:website|web ?site|url|domain)\s*[:\-]?\s*((?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s,]*)?)/i);
+  if (labeledUrl) {
+    let u = labeledUrl[1].trim().replace(/[,;.]+$/, "");
+    if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+    out.website = u;
+  } else {
+    // Any http(s) URL anywhere in the text
+    const anyUrl = text.match(/https?:\/\/[^\s,]+/);
+    if (anyUrl) out.website = anyUrl[0].replace(/[,;.)]+$/, "");
+  }
+
+  // ---- Phone ----
+  const phoneMatch = text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+  if (phoneMatch) out.phone = phoneMatch[0];
+
+  // ---- Business name (labeled) ----
+  const bizLabel = text.match(/(?:business name|company name|company|business|dba|d\/b\/a|organization|practice name|clinic name)\s*[:\-]\s*([^\n\r]{2,120})/i);
+  if (bizLabel) {
+    const candidate = bizLabel[1].trim().replace(/[,;]+$/, "");
+    // Drop trailing label noise like "Phone" or "Email" that sometimes follows on the same line.
+    const cleaned = candidate.split(/\s{2,}|\t/)[0].trim();
+    if (cleaned.length >= 2 && cleaned.length <= 120) out.clientName = cleaned;
+  }
+
+  // ---- Contact name (labeled) ----
+  const contactLabel = text.match(/(?:owner|contact name|primary contact|your name|full name|name)\s*[:\-]\s*([A-Za-z][A-Za-z .'\-]{1,80})/i);
+  if (contactLabel) {
+    const c = contactLabel[1].trim().replace(/[,;]+$/, "");
+    if (c.length >= 2) out.contactName = c;
+  }
+
+  return out;
+}
+
 export async function extractIntake(pdfText: string): Promise<IntakeData> {
   if (!pdfText) return {};
+
+  // Run the deterministic heuristics first — they're cheap and give us a
+  // guaranteed floor even if the LLM produces nothing usable.
+  const heur = extractIntakeHeuristics(pdfText);
+  console.log("[extractIntake] heuristic fallback found:", {
+    clientName: heur.clientName,
+    contactName: heur.contactName,
+    website: heur.website,
+    email: heur.email,
+  });
+
   const sys = `You extract structured client information from intake/onboarding forms and order forms for digital marketing audits. Output ONLY valid JSON. Never include commentary.`;
   const usr = `Extract this client intake/order form into JSON with these keys (NAP fields are CRITICAL — they appear on the audit cover):
 
@@ -180,14 +243,27 @@ export async function extractIntake(pdfText: string): Promise<IntakeData> {
 - budget: string or null
 - rawNotes: 1-2 sentence summary
 
-Use null for unknown fields. The clientName, address, and phone fields together form the NAP (Name, Address, Phone) block displayed prominently on the audit cover, so be thorough finding them.
+Use null for unknown fields. The clientName, address, and phone fields together form the NAP (Name, Address, Phone) block displayed prominently on the audit cover, so be thorough finding them. Look broadly: any business/company/organization/practice/clinic/firm/agency name counts. Any URL/domain in the document counts as the website unless explicitly labeled otherwise.
 
 FORM TEXT:
 ${pdfText.slice(0, 18000)}
 
 Return only JSON.`;
-  const txt = await chatJSON(sys, usr, 2048);
-  const intake = extractJson<IntakeData>(txt, {});
+  let intake: IntakeData = {};
+  try {
+    const txt = await chatJSON(sys, usr, 2048);
+    intake = extractJson<IntakeData>(txt, {});
+  } catch (err) {
+    console.warn("[extractIntake] LLM call failed, falling back to heuristics only", err);
+  }
+
+  // Back-fill any field the LLM left blank with the deterministic heuristics.
+  if (!intake.clientName && heur.clientName) intake.clientName = heur.clientName;
+  if (!intake.contactName && heur.contactName) intake.contactName = heur.contactName;
+  if (!intake.website && heur.website) intake.website = heur.website;
+  if (!intake.email && heur.email) intake.email = heur.email;
+  if (!intake.phone && heur.phone) intake.phone = heur.phone;
+
   // Deterministically derive owner first name from contactName so the
   // ElevenLabs narration and downstream skills never have to guess.
   if (intake.contactName) {

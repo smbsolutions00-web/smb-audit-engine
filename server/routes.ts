@@ -86,6 +86,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.log(`[intake-preview] received ${req.file.originalname} (${req.file.size} bytes)`);
       const intakeText = await parsePdfBuffer(req.file.buffer);
       console.log(`[intake-preview] parsed PDF: ${intakeText.length} chars of text`);
+      console.log(`[intake-preview] PDF first 800 chars: ${JSON.stringify(intakeText.slice(0, 800))}`);
       if (!intakeText || intakeText.trim().length < 20) {
         console.warn("[intake-preview] PDF parsed to empty/near-empty text — likely a scanned PDF without OCR");
       }
