@@ -764,10 +764,10 @@ export function buildPrompt(
     "==================================================================",
     "DELIVERABLES",
     "==================================================================",
-    `- ${slideCount} slide${slideCount === 1 ? "" : "s"} in this template's default style.`,
-    `- A PDF copy of the deck.`,
-    `- A PPTX copy of the deck.`,
-    `- A ZIP archive containing every slide as a separate high-resolution PNG image, named slide-01.png, slide-02.png, etc. This is required so the images can be reused individually outside the deck.`,
+    `- At minimum ${slideCount} slide${slideCount === 1 ? "" : "s"} in this template's default style. There is no upper cap. If the content above warrants more slides for clarity (for example, splitting a dense pillar into 2 slides, or adding a separate slide for each keyword tier), please add them. Do not compress or omit content to hit a target count.`,
+    `- A PDF copy of the full deck.`,
+    `- A PPTX copy of the full deck.`,
+    `- A ZIP archive containing EVERY slide in the final deck as a separate high-resolution PNG image. The ZIP must include exactly one PNG per slide produced (if the deck has 14 slides, the ZIP must have 14 PNGs). Name them slide-01.png, slide-02.png, slide-03.png, and so on through the final slide, zero-padded to two digits. This is required so the images can be reused individually outside the deck.`,
   ]
     .filter(Boolean)
     .join("\n");
