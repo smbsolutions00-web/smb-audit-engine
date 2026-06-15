@@ -2780,6 +2780,8 @@ type ManusDeckState = {
   startedAt?: number;
   completedAt?: number;
   logoAdjusted?: boolean;
+  manusLogo?: { exists: boolean; filename?: string; mime?: string; url?: string };
+  theme?: { primary?: string; accent?: string };
 };
 
 function ClientFacingDeckCard({ auditId }: { auditId: string }) {
@@ -2844,12 +2846,13 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
     };
   }, [statusUrl]);
 
-  async function handleSend() {
+  async function handleSend(opts: { resetTheme?: boolean } = {}) {
     setSubmitting(true);
     setErrorMsg(null);
     try {
       const fd = new FormData();
       if (logo) fd.append("logo", logo);
+      if (opts.resetTheme) fd.append("resetTheme", "true");
       const res = await fetch(startUrl, {
         method: "POST",
         credentials: "include",
@@ -2866,6 +2869,25 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
       setErrorMsg(err?.message || "Could not start the Manus task.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Drop the persisted logo so the next regenerate starts clean.
+  async function handleRemoveLogo() {
+    try {
+      await fetch(`${API_BASE}/api/audits/${auditId}/manus-logo`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      setLogo(null);
+      if (inputRef.current) inputRef.current.value = "";
+      await refreshStatus();
+      toast({
+        title: "Logo removed",
+        description: "The next regenerate will use no logo until you upload a new one.",
+      });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Could not remove the stored logo.");
     }
   }
 
@@ -3019,11 +3041,57 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
       </p>
 
       <div className="mt-5 grid gap-5">
-        {/* Logo picker (only shown when no task is running yet) */}
-        {!isRunning && !isComplete && (
-          <div className="grid gap-2">
-            <Label>Client logo (optional)</Label>
-            {logo ? (
+        {/* Logo + theme controls (always visible except while running) */}
+        {!isRunning && (
+          <div className="grid gap-3">
+            <Label>Client logo and theme</Label>
+
+            {/* Persisted logo card: shown when we already have a stored logo
+                and the user has not picked a new one in this session. */}
+            {!logo && state.manusLogo?.exists && (
+              <div
+                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
+                data-testid="manus-logo-stored"
+              >
+                <img
+                  src={`${state.manusLogo.url}?v=${state.completedAt || state.startedAt || ""}`}
+                  alt="Stored client logo"
+                  className="h-12 w-12 shrink-0 rounded border border-card-border bg-white object-contain"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    Reusing logo: {state.manusLogo.filename || "saved file"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    The next regenerate will use this logo automatically. No re-upload needed.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => inputRef.current?.click()}
+                  disabled={submitting}
+                  data-testid="manus-logo-replace"
+                >
+                  Replace
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRemoveLogo}
+                  disabled={submitting}
+                  data-testid="manus-logo-clear"
+                  title="Remove the stored logo"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+
+            {/* New file picked in this session. */}
+            {logo && (
               <div
                 className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
                 data-testid="manus-logo-file"
@@ -3032,7 +3100,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{logo.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    {(logo.size / 1024).toFixed(0)} KB
+                    {(logo.size / 1024).toFixed(0)} KB, will replace the stored logo on next regenerate.
                   </div>
                 </div>
                 <Button
@@ -3046,7 +3114,10 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                   <X className="h-4 w-4" />
                 </Button>
               </div>
-            ) : (
+            )}
+
+            {/* Upload dropzone shown when there is no logo at all. */}
+            {!logo && !state.manusLogo?.exists && (
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
@@ -3060,6 +3131,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                 </span>
               </button>
             )}
+
             <input
               ref={inputRef}
               type="file"
@@ -3067,6 +3139,44 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
               className="hidden"
               onChange={(e) => setLogo(e.target.files?.[0] ?? null)}
             />
+
+            {/* Locked theme color swatches. */}
+            {(state.theme?.primary || state.theme?.accent) && (
+              <div
+                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 px-3 py-2"
+                data-testid="manus-theme-swatches"
+              >
+                <div className="text-xs font-medium text-muted-foreground">Locked theme:</div>
+                {state.theme?.primary && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-4 w-4 rounded border border-card-border"
+                      style={{ background: state.theme.primary }}
+                    />
+                    <span className="text-xs font-mono">{state.theme.primary}</span>
+                  </div>
+                )}
+                {state.theme?.accent && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-4 w-4 rounded border border-card-border"
+                      style={{ background: state.theme.accent }}
+                    />
+                    <span className="text-xs font-mono">{state.theme.accent}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleSend({ resetTheme: true })}
+                  disabled={submitting}
+                  className="ml-auto text-xs text-accent underline-offset-2 hover:underline"
+                  data-testid="manus-theme-reset"
+                  title="Re-extract colors from the logo on the next regenerate"
+                >
+                  Reset theme
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -3262,7 +3372,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           <div className="flex justify-end">
             <Button
               type="button"
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={submitting}
               className="bg-accent text-accent-foreground hover:bg-accent/90"
               data-testid="button-send-to-manus"

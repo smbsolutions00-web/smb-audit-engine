@@ -34,6 +34,9 @@ import {
   deckPptxPath,
   deckExists,
   deckPdfFilePath,
+  getPersistedLogoInfo,
+  persistedLogoPath,
+  clearPersistedLogo,
 } from "./manus-export";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
@@ -878,7 +881,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           logoDataUrl = `data:${mime};base64,${req.file.buffer.toString("base64")}`;
         }
 
-        const { taskId, taskUrl } = await startManusDeck(req.params.id, { logoDataUrl });
+        // Optional flags from the form so the UI can reset stored state.
+        const clearLogo = String(req.body?.clearLogo || "").toLowerCase() === "true";
+        const resetTheme = String(req.body?.resetTheme || "").toLowerCase() === "true";
+        const { taskId, taskUrl } = await startManusDeck(req.params.id, {
+          logoDataUrl,
+          clearLogo,
+          resetTheme,
+        });
         res.json({ ok: true, taskId, taskUrl, status: "running" });
       } catch (err: any) {
         console.error("send-to-manus error:", err);
@@ -896,14 +906,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (state && (state.status === "queued" || state.status === "running")) {
         state = await reconcileManusState(req.params.id);
       }
-      if (!state) return res.json({ status: "idle" });
+      const logoInfo = getPersistedLogoInfo(req.params.id);
+      const manusLogo = logoInfo.exists
+        ? {
+            exists: true as const,
+            filename: logoInfo.filename,
+            mime: logoInfo.mime,
+            url: `/api/audits/${req.params.id}/manus-logo`,
+          }
+        : { exists: false as const };
+      if (!state) return res.json({ status: "idle", manusLogo, theme: { primary: undefined, accent: undefined } });
       const hasZip = deckExists(deckZipPath(req.params.id));
       const hasPdf = deckExists(deckPdfPath(req.params.id));
       const hasPptx = deckExists(deckPptxPath(req.params.id));
-      res.json({ ...state, hasZip, hasPdf, hasPptx });
+      const theme = { primary: state.themePrimary, accent: state.themeAccent };
+      res.json({ ...state, hasZip, hasPdf, hasPptx, manusLogo, theme });
     } catch (err: any) {
       console.error("manus-status error:", err);
       res.status(500).json({ message: err?.message || "Failed to read Manus status" });
+    }
+  });
+
+  app.get("/api/audits/:id/manus-logo", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const p = persistedLogoPath(req.params.id);
+      if (!p || !existsSync(p)) {
+        return res.status(404).json({ message: "No logo stored for this audit." });
+      }
+      const info = getPersistedLogoInfo(req.params.id);
+      const stat = statSync(p);
+      res.setHeader("Content-Type", info.mime || "image/png");
+      res.setHeader("Content-Length", stat.size.toString());
+      res.setHeader("Cache-Control", "no-cache");
+      createReadStream(p).pipe(res);
+    } catch (err: any) {
+      console.error("manus-logo error:", err);
+      res.status(500).json({ message: err?.message || "Failed to read logo" });
+    }
+  });
+
+  app.delete("/api/audits/:id/manus-logo", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      clearPersistedLogo(req.params.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("manus-logo delete error:", err);
+      res.status(500).json({ message: err?.message || "Failed to clear logo" });
     }
   });
 

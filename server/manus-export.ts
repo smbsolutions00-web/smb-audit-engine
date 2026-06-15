@@ -67,6 +67,10 @@ export interface ManusExportState {
   hasZip?: boolean;
   hasPptx?: boolean;
   logoAdjusted?: boolean; // true when we padded a dark logo onto a white background
+  // Locked-in deck theme so every regenerate produces the same palette.
+  // Set once on first run from the logo or by the user, then reused.
+  themePrimary?: string;  // hex like "#A4577B"
+  themeAccent?: string;   // hex like "#F2E4EC"
   startedAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -253,6 +257,60 @@ async function prepareLogo(
 }
 
 /**
+ * Extract a primary (most saturated dominant) and accent (lighter variant)
+ * hex color from a logo. Uses sharp's downscale + per-pixel hue bucketing
+ * to avoid pulling background pixels.
+ *
+ * Returns null if the logo cannot be analyzed.
+ */
+async function extractLogoTheme(logoDataUrl: string): Promise<{ primary: string; accent: string } | null> {
+  const match = logoDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return null;
+  const [, mimeType, b64] = match;
+  const isSvg = /svg/i.test(mimeType);
+  const inputBuf = Buffer.from(b64, "base64");
+  try {
+    const img = isSvg
+      ? sharp(inputBuf, { density: 200 }).resize({ width: 256 }).png()
+      : sharp(inputBuf).resize({ width: 256, withoutEnlargement: true });
+    const { data, info } = await img
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const buckets = new Map<string, { r: number; g: number; b: number; sat: number; count: number }>();
+    for (let i = 0; i < data.length; i += info.channels) {
+      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3] ?? 255;
+      if (a < 200) continue; // skip transparent
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const sat = max === 0 ? 0 : (max - min) / max; // 0..1
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255; // 0..1
+      // skip near-white and near-black so we don't pick background pixels.
+      if (lum > 0.95 || lum < 0.05) continue;
+      if (sat < 0.2) continue; // skip gray
+      // bucket by 24-step hue quantization
+      const key = `${Math.round(r / 24)},${Math.round(g / 24)},${Math.round(b / 24)}`;
+      const prev = buckets.get(key);
+      if (prev) { prev.count++; }
+      else buckets.set(key, { r, g, b, sat, count: 1 });
+    }
+    if (buckets.size === 0) return null;
+    // sort by count * saturation so colorful dominant wins over slightly-saturated huge area.
+    const sorted = Array.from(buckets.values()).sort((a, b) => b.count * b.sat - a.count * a.sat);
+    const top = sorted[0];
+    const toHex = (r: number, g: number, b: number) =>
+      `#${[r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+    const primary = toHex(top.r, top.g, top.b);
+    // accent = same hue, lightened toward white by mixing 70% white.
+    const lighten = (v: number) => Math.round(v * 0.3 + 255 * 0.7);
+    const accent = toHex(lighten(top.r), lighten(top.g), lighten(top.b));
+    return { primary, accent };
+  } catch (err) {
+    console.warn("[manus] theme extraction failed:", err);
+    return null;
+  }
+}
+
+/**
  * Build the Manus prompt for the Glamour HTML-mode template.
  *
  * Structure (dynamic count, problems-first):
@@ -272,7 +330,14 @@ async function prepareLogo(
  * slide, in keeping with Glamour's editable element library. No raw CSS
  * or layout instructions — those override the template.
  */
-function buildPrompt(audit: Audit, report: ReportData | null): string {
+function buildPrompt(
+  audit: Audit,
+  report: ReportData | null,
+  theme?: { primary?: string; accent?: string },
+): string {
+  const themePrimary = theme?.primary;
+  const themeAccent = theme?.accent;
+  const hasLockedTheme = Boolean(themePrimary && themeAccent);
   const cn = audit.clientName || "the client";
   const ownerRaw = (audit as any).contactName || (audit as any).ownerName || "";
   const ownerFirst = String(ownerRaw).trim().split(/\s+/)[0] || "";
@@ -390,7 +455,9 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       `Location line: "${loc}".`,
       `Footer line: "Prepared by Dwayne Johnson, SMB Solutions".`,
       `Tagline: "Faith-rooted strategy. Seamless integration. Real human support."`,
-      `IMAGERY: If a client logo image was attached to this task, display it prominently and centered on the cover. Use it as the source of the deck's color theme across every slide. Pull a primary brand color and one or two accent colors from the logo and apply them consistently.`,
+      hasLockedTheme
+        ? `IMAGERY: If a client logo image was attached to this task, display it prominently and centered on the cover. Use primary color ${themePrimary} and accent color ${themeAccent} across every slide. These colors are locked, do not deviate from them.`
+        : `IMAGERY: If a client logo image was attached to this task, display it prominently and centered on the cover. Use it as the source of the deck's color theme across every slide. Pull a primary brand color and one or two accent colors from the logo and apply them consistently.`,
     ].join("\n"),
   );
 
@@ -629,7 +696,9 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       `  4. Automate follow-ups, reminders, and task assignments`,
       `  5. Sync seamlessly with email, SMS, and scheduling tools`,
       `  6. Keep your business organized, responsive, and growing`,
-      `IMAGERY: A realistic-looking SaaS dashboard mockup occupying the right two-thirds of the slide. Show: a left sidebar with nav items (Dashboard, Leads, Pipeline, Inbox, Calendar, Reports), a top metrics row (Leads This Month, Active Deals, Tasks Due, Revenue), a kanban-style pipeline with three or four deal cards under columns labeled "New", "Working", "Closed", and a small activity feed on the right. Use the deck's brand accent color for highlights, white card backgrounds, and rounded corners. Make it look like a modern CRM product screenshot.`,
+      hasLockedTheme
+        ? `IMAGERY: A realistic-looking SaaS dashboard mockup occupying the right two-thirds of the slide. Show: a left sidebar with nav items (Dashboard, Leads, Pipeline, Inbox, Calendar, Reports), a top metrics row (Leads This Month, Active Deals, Tasks Due, Revenue), a kanban-style pipeline with three or four deal cards under columns labeled "New", "Working", "Closed", and a small activity feed on the right. Use accent color ${themeAccent} for highlights and primary color ${themePrimary} for headings. White card backgrounds, rounded corners. Make it look like a modern CRM product screenshot.`
+        : `IMAGERY: A realistic-looking SaaS dashboard mockup occupying the right two-thirds of the slide. Show: a left sidebar with nav items (Dashboard, Leads, Pipeline, Inbox, Calendar, Reports), a top metrics row (Leads This Month, Active Deals, Tasks Due, Revenue), a kanban-style pipeline with three or four deal cards under columns labeled "New", "Working", "Closed", and a small activity feed on the right. Use the deck's brand accent color for highlights, white card backgrounds, and rounded corners. Make it look like a modern CRM product screenshot.`,
       `Closing line: "Built around four pillars, connected through one unified client hub."`,
     ].join("\n"),
   );
@@ -659,7 +728,9 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       `  - The Outcome: "A predictable, scalable system for capturing and keeping customers."`,
       `Tagline (below the three cards): "Faith-rooted strategy. Seamless integration. Real human support."`,
       `Call to action: Prominent button or banner labeled "START" inviting the client to begin.`,
-      `IMAGERY: The client logo (if attached) above the three statement cards. A subtle pattern or gradient background in the deck accent color behind the cards.`,
+      hasLockedTheme
+        ? `IMAGERY: The client logo (if attached) above the three statement cards. A subtle pattern or gradient background using accent color ${themeAccent} behind the cards.`
+        : `IMAGERY: The client logo (if attached) above the three statement cards. A subtle pattern or gradient background in the deck accent color behind the cards.`,
     ].join("\n"),
   );
 
@@ -683,7 +754,9 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     "==================================================================",
     "VISUAL STYLE",
     "==================================================================",
-    `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}. Lean into the IMAGERY directives on each slide: use 2D vector icons, simple charts, and clean dashboard or diagram mockups built from the template's editable element library.`,
+    hasLockedTheme
+      ? `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. LOCKED COLOR THEME: primary color ${themePrimary}, accent color ${themeAccent}. Use these exact colors on every slide for headings, accents, dividers, callouts, charts, and any branded highlights. Do not introduce other accent colors. Do not deviate from this palette. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}. Lean into the IMAGERY directives on each slide: use 2D vector icons, simple charts, and clean dashboard or diagram mockups built from the template's editable element library.`
+      : `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}. Lean into the IMAGERY directives on each slide: use 2D vector icons, simple charts, and clean dashboard or diagram mockups built from the template's editable element library.`,
     "",
     "==================================================================",
     "DECK CONTENT",
@@ -722,26 +795,59 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
  */
 export async function startManusDeck(
   auditId: string,
-  opts: { logoDataUrl?: string } = {},
+  opts: {
+    logoDataUrl?: string;
+    clearLogo?: boolean;
+    themePrimary?: string;
+    themeAccent?: string;
+    resetTheme?: boolean;
+  } = {},
 ): Promise<{ taskId: string; taskUrl?: string }> {
   const audit = await storage.getAudit(auditId);
   if (!audit) throw new Error("Audit not found");
   const report: ReportData | null = audit.reportData ? JSON.parse(audit.reportData) : null;
+  const prevState = readState(audit);
 
-  const prompt = buildPrompt(audit, report);
-  const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+  // If the caller asked to drop the persisted logo, do that first so the
+  // reuse branch below cannot pick it up.
+  if (opts.clearLogo) {
+    try { clearPersistedLogo(auditId); } catch {}
+  }
 
   // Resolve the logo: explicit upload wins, otherwise reuse a previously
   // persisted one from this audit's deck folder so the user does not have
   // to re-upload on every regenerate.
   let effectiveLogoDataUrl: string | undefined = opts.logoDataUrl;
   if (!effectiveLogoDataUrl || !/^data:image\//.test(effectiveLogoDataUrl)) {
-    const reused = readPersistedLogo(auditId);
+    const reused = opts.clearLogo ? null : readPersistedLogo(auditId);
     if (reused) {
       effectiveLogoDataUrl = reused;
       console.log(`[manus] reusing previously-uploaded logo for ${auditId}`);
     }
   }
+
+  // Resolve the locked theme: explicit override wins, otherwise reuse the
+  // theme we already extracted on a prior run, otherwise extract fresh from
+  // the current logo (if any). resetTheme forces a fresh extraction.
+  let themePrimary: string | undefined =
+    opts.themePrimary ?? (opts.resetTheme ? undefined : prevState?.themePrimary);
+  let themeAccent: string | undefined =
+    opts.themeAccent ?? (opts.resetTheme ? undefined : prevState?.themeAccent);
+  if ((!themePrimary || !themeAccent) && effectiveLogoDataUrl && /^data:image\//.test(effectiveLogoDataUrl)) {
+    try {
+      const extracted = await extractLogoTheme(effectiveLogoDataUrl);
+      if (extracted) {
+        themePrimary = themePrimary || extracted.primary;
+        themeAccent = themeAccent || extracted.accent;
+        console.log(`[manus] extracted theme for ${auditId}: primary=${themePrimary} accent=${themeAccent}`);
+      }
+    } catch (err) {
+      console.warn(`[manus] theme extraction failed for ${auditId}:`, err);
+    }
+  }
+
+  const prompt = buildPrompt(audit, report, { primary: themePrimary, accent: themeAccent });
+  const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
 
   let logoAdjusted = false;
   if (effectiveLogoDataUrl && /^data:image\//.test(effectiveLogoDataUrl)) {
@@ -797,6 +903,8 @@ export async function startManusDeck(
     hasPptx: false,
     slideCount: undefined,
     logoAdjusted,
+    themePrimary,
+    themeAccent,
   });
   await storage.appendEvent(auditId, "manus_deck_requested", {
     taskId: json.task_id,
@@ -1195,4 +1303,55 @@ export function deckPptxPath(auditId: string): string {
 
 export function deckExists(p: string): boolean {
   return existsSync(p);
+}
+
+/**
+ * Lightweight info about the persisted logo (if any). Used by the
+ * /manus-status endpoint so the UI can show "Reusing previously-uploaded
+ * logo: filename.png" without having to send the full image bytes.
+ */
+export function getPersistedLogoInfo(auditId: string): { exists: boolean; filename?: string; mime?: string } {
+  const dir = join(DECK_ROOT, auditId);
+  if (!existsSync(dir)) return { exists: false };
+  try {
+    const file = readdirSync(dir).find((f) => /^logo-original\.(png|jpe?g|webp|gif|svg)$/i.test(f));
+    if (!file) return { exists: false };
+    let mime = "image/png";
+    const mimePath = join(dir, "logo-original.mime");
+    if (existsSync(mimePath)) {
+      try { mime = readFileSync(mimePath, "utf8").trim() || mime; } catch {}
+    }
+    return { exists: true, filename: file, mime };
+  } catch {
+    return { exists: false };
+  }
+}
+
+/**
+ * Stream-friendly path to the persisted logo for a direct download.
+ */
+export function persistedLogoPath(auditId: string): string | null {
+  const dir = join(DECK_ROOT, auditId);
+  if (!existsSync(dir)) return null;
+  try {
+    const file = readdirSync(dir).find((f) => /^logo-original\.(png|jpe?g|webp|gif|svg)$/i.test(f));
+    return file ? join(dir, file) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete the persisted logo so a regenerate will start from a clean slate.
+ */
+export function clearPersistedLogo(auditId: string): void {
+  const dir = join(DECK_ROOT, auditId);
+  if (!existsSync(dir)) return;
+  try {
+    for (const f of readdirSync(dir)) {
+      if (/^logo-original\.(png|jpe?g|webp|gif|svg|mime)$/i.test(f)) {
+        rmSync(join(dir, f), { force: true });
+      }
+    }
+  } catch {}
 }
