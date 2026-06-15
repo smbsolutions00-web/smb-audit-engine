@@ -2232,15 +2232,27 @@ function FinalDeliverableSection({
   const downloadUrl = `${API_BASE}/api/audits/${auditId}/manus-pdf`;
   const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
 
-  async function loadScript(opts: { regenerate?: boolean } = {}) {
+  async function loadScript(opts: { regenerate?: boolean; peek?: boolean } = {}) {
     setScriptLoading(true);
     setScriptError(null);
     try {
-      const url = opts.regenerate
-        ? `${scriptUrl}?format=json&regenerate=1`
-        : `${scriptUrl}?format=json`;
+      const params = new URLSearchParams({ format: "json" });
+      if (opts.regenerate) params.set("regenerate", "1");
+      if (opts.peek) params.set("peek", "1");
+      const url = `${scriptUrl}?${params.toString()}`;
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
+        // In peek mode a 404 just means "no script saved yet", surface that
+        // as a friendly message instead of a scary error.
+        if (opts.peek && res.status === 404) {
+          setScriptText("");
+          setScriptIsEdited(false);
+          setScriptDirty(false);
+          setScriptError(
+            "No saved script yet. Click Regenerate to build one from the Manus PDF (takes about 20 seconds)."
+          );
+          return;
+        }
         let msg = `Failed (HTTP ${res.status})`;
         try {
           const j = await res.json();
@@ -2251,6 +2263,18 @@ function FinalDeliverableSection({
         throw new Error(msg);
       }
       const json = await res.json();
+      // Peek can return an empty script with hasGenerated=true if a script was
+      // generated before Round 11 cached scripts to editedScript. Treat that
+      // the same as "no saved script".
+      if (opts.peek && !json.script) {
+        setScriptText("");
+        setScriptIsEdited(false);
+        setScriptDirty(false);
+        setScriptError(
+          "No saved script for this audit yet. Click Regenerate to build one from the Manus PDF (takes about 20 seconds)."
+        );
+        return;
+      }
       setScriptText(json.script || "");
       setScriptIsEdited(!!json.edited);
       setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
@@ -2271,7 +2295,10 @@ function FinalDeliverableSection({
     setScriptMode(mode);
     setScriptOpen(true);
     if (!scriptText) {
-      await loadScript();
+      // View is read-only and must NEVER trigger an expensive LLM call. Use
+      // peek mode so the server only serves a cached script (and 404s if
+      // there isn't one). Edit mode is allowed to generate on demand.
+      await loadScript({ peek: mode === "view" });
     }
   }
 
