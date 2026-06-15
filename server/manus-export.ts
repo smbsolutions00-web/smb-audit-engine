@@ -32,11 +32,13 @@ import { jsPDF } from "jspdf";
 import sharp from "sharp";
 
 const MANUS_BASE = "https://api.manus.ai";
-// Glamour HTML-mode template — fully editable text-based slides, much faster
-// than image-mode (nano-banana) and far smaller file sizes. Theme adapts to
-// the uploaded client logo automatically. Switched from whiteboard nano-banana
-// after image-mode runs took 15+ min and produced 80MB+ PDFs.
-const TEMPLATE_UID = "glamour_1a961063-1678-4c01-b3a5-e1d44a4f4522";
+// Whiteboard nano-banana template (hand-drawn marker style, the look
+// Krystal/Dwayne confirmed by clicking Create Slides > Whiteboard in the
+// Manus UI). The Glamour HTML template produced clean teal blocks that
+// felt corporate and bulky; switching back to whiteboard renders every
+// slide as an illustrated marker-on-whiteboard scene.
+const TEMPLATE_UID = "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08";
+const MODEL = "nano-banana";
 const POLL_INTERVAL_MS = 8000;
 const POLL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
@@ -330,14 +332,15 @@ async function extractLogoTheme(logoDataUrl: string): Promise<{ primary: string;
  * slide, in keeping with Glamour's editable element library. No raw CSS
  * or layout instructions — those override the template.
  */
-function buildPrompt(
+export function buildPrompt(
   audit: Audit,
   report: ReportData | null,
-  theme?: { primary?: string; accent?: string },
+  theme?: { primary?: string; accent?: string; slideLimit?: number },
 ): string {
-  const themePrimary = theme?.primary;
-  const themeAccent = theme?.accent;
-  const hasLockedTheme = Boolean(themePrimary && themeAccent);
+  // Theme args are intentionally ignored in whiteboard nano-banana mode.
+  // The whiteboard template renders its own marker-on-board styling and
+  // any LAYOUT or color directives override it back into corporate HTML.
+  const slideLimit = theme?.slideLimit;
   const cn = audit.clientName || "the client";
   const ownerRaw = (audit as any).contactName || (audit as any).ownerName || "";
   const ownerFirst = String(ownerRaw).trim().split(/\s+/)[0] || "";
@@ -455,9 +458,7 @@ function buildPrompt(
       `Location line: "${loc}".`,
       `Footer line: "Prepared by Dwayne Johnson, SMB Solutions".`,
       `Tagline: "Faith-rooted strategy. Seamless integration. Real human support."`,
-      hasLockedTheme
-        ? `LAYOUT: If a client logo image was attached to this task, display it prominently and centered on the cover using the Glamour template's native logo element. Use primary color ${themePrimary} and accent color ${themeAccent} across every slide. These colors are locked, do not deviate from them.`
-        : `LAYOUT: If a client logo image was attached to this task, display it prominently and centered on the cover using the Glamour template's native logo element. Use it as the source of the deck's color theme across every slide. Pull a primary brand color and one or two accent colors from the logo and apply them consistently.`,
+      `If a client logo was attached, include it on the cover.`,
     ].join("\n"),
   );
 
@@ -474,7 +475,6 @@ function buildPrompt(
         (p) =>
           `  - ${p.label}: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}`,
       ),
-      `LAYOUT: Use the Glamour template's native scoreboard or stat-card layout, four pillar cards arranged in a 2x2 grid, each card showing the grade letter badge and percentage. Color the badges by severity using the template's built-in color palette. Do not generate a raster image, use native HTML elements only.`,
       problemPillars.length
         ? `Closing line: "${problemPillars.length} of 4 pillars need focused attention. The opportunity is real, and the path forward is clear."`
         : `Closing line: "All four pillars are healthy. The opportunity now is to sharpen, scale, and protect what is working."`,
@@ -522,7 +522,6 @@ function buildPrompt(
           `  A 24/7 AI Workforce that captures every lead and inquiry, across phone, chat, email, and social, and routes them into one unified inbox.`,
           `  Core agents: AI Receptionist, Chat Agent, Support Agent, Follow-Up Agent, Routing Agent.`,
           `  Outcome line: "Never miss a lead or customer inquiry again."`,
-          `LAYOUT: Render the bullet lists above as visible text cards or two-column panels using the template's native elements. Do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -550,18 +549,16 @@ function buildPrompt(
           `  Be the answer Google AND AI engines pick first. Local SEO, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization), tuned to the highest-volume opportunity keywords above.`,
           `  Publish targeted content, optimize on-page signals, and earn citations.`,
           `  Outcome line: "Capture the searches your competitors are winning today."`,
-          `LAYOUT: Build a two-column comparison panel using the template's native two-column element. No SERP mockup, no bar chart with invented labels, no generated image.`,
-          `  LEFT COLUMN header "WHERE YOU RANK". Render one card per ranking keyword below using these EXACT strings (do not paraphrase, do not invent additional rows):`,
+          `Where you rank:`,
           ...ranking.map(
             (k) =>
-              `    - "${k.keyword}" | rank #${k.position ?? "?"} | ${(k.volume ?? 0).toLocaleString()}/mo`,
+              `  - ${k.keyword}, rank #${k.position ?? "?"}, ${(k.volume ?? 0).toLocaleString()}/mo`,
           ),
-          `  RIGHT COLUMN header "WHAT YOU MISS". Render one card per opportunity keyword below using these EXACT strings as the visible labels (do not paraphrase, do not invent additional rows, do not shorten):`,
+          `What you miss:`,
           ...opportunity.map(
             (k) =>
-              `    - "${k.keyword}" | ${(k.volume ?? 0).toLocaleString()}/mo`,
+              `  - ${k.keyword}, ${(k.volume ?? 0).toLocaleString()}/mo`,
           ),
-          `  Style: left column cards use a green check badge with the rank number; right column cards use an amber warning badge with the volume number. Add a magnifying-glass icon as a section badge in the slide header. Do NOT add any other keyword labels beyond the exact strings listed above.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -583,7 +580,6 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  Claim and standardize every directory listing. Rebuild NAP consistency across the top 50+ citation sources. Lock down Google Business Profile, Bing Places, Apple Maps, and major industry directories.`,
           `  Outcome line: "Show up everywhere customers look, with the same name, address, and phone."`,
-          `LAYOUT: Use the template's native donut or progress element on the left showing "${claimed} of ${totalListings} directories accurate". On the right, a stacked text list of common directories (Google Business Profile, Yelp, Bing, Apple Maps, Facebook, Yellow Pages) each marked with a checkmark or X based on listed or missing status. Use native template elements only, do not generate a raster image.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -616,7 +612,6 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  An AI-assisted content calendar across Facebook, Instagram, TikTok, and LinkedIn. Posts drafted, scheduled, and tracked from one dashboard.`,
           `  Outcome line: "Stay visible and relevant without constant manual effort."`,
-          `LAYOUT: Render the social platforms (Facebook, Instagram, TikTok, LinkedIn, YouTube) as a horizontal row of text labels or template-native icons. Render the bullet list above as visible text cards. Use native template elements only, do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -657,7 +652,6 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  A reputation system: automated review requests after every transaction, fast review responses, and 5-star reviews flowing into Google Business Profile on a steady cadence.`,
           `  Outcome line: "Turn trust into more calls, bookings, and sales."`,
-          `LAYOUT: Render a five-step Review Funnel as a horizontal text-card sequence using the template's native step or timeline element: Transaction, Automated SMS or email request, Customer review, Owner response, Repeat. Render the bullets above as visible text cards. Use native template elements only, do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -677,7 +671,6 @@ function buildPrompt(
           (p) =>
             `  - ${p.label} (${p.score ?? "?"}/100${p.grade ? `, Grade ${p.grade}` : ""}): ${p.summary || "steady performance"}`,
         ),
-        `LAYOUT: Render a row of pillar cards using the template's native card element, each card topped with a check badge and the pillar's grade letter. No generated images.`,
       ].join("\n"),
     );
   }
@@ -696,9 +689,6 @@ function buildPrompt(
       `  4. Automate follow-ups, reminders, and task assignments`,
       `  5. Sync seamlessly with email, SMS, and scheduling tools`,
       `  6. Keep your business organized, responsive, and growing`,
-      hasLockedTheme
-        ? `LAYOUT: Use the template's native two-column layout. Left: the six numbered capability cards. Right: a simple text-based dashboard panel built from native elements (a left nav list, a metrics row, three kanban columns labeled New, Working, Closed). Use accent color ${themeAccent} for highlights and primary color ${themePrimary} for headings. Do not generate a raster image, use native template elements only.`
-        : `LAYOUT: Use the template's native two-column layout. Left: the six numbered capability cards. Right: a simple text-based dashboard panel built from native elements (a left nav list, a metrics row, three kanban columns labeled New, Working, Closed). Use the deck's primary color for headings and accent color for highlights. Do not generate a raster image, use native template elements only.`,
       `Closing line: "Built around four pillars, connected through one unified client hub."`,
     ].join("\n"),
   );
@@ -712,7 +702,6 @@ function buildPrompt(
       `Phase 1 (Days 1 to 30), Foundation: claim and standardize directory listings, fix NAP, set up review collection.`,
       `Phase 2 (Days 31 to 60), Activation: launch the AI workforce, activate review automation, activate the social content calendar.`,
       `Phase 3 (Days 61 to 90), Acceleration: keyword content build out, authority and link building, reporting cadence.`,
-      `LAYOUT: Use the template's native horizontal timeline or three-step element. Each phase is a card with a numbered circle (1, 2, 3), a phase title, and a date range. No generated images.`,
       `Closing line: "Each step can be completed without adding stress to your week. That is what SMB Solutions is here for."`,
     ].join("\n"),
   );
@@ -727,20 +716,21 @@ function buildPrompt(
       `  - The Focus: "Pillar fixes, dashboards, real human support."`,
       `  - The Outcome: "A predictable, scalable system for capturing and keeping customers."`,
       `Tagline (below the three cards): "Faith-rooted strategy. Seamless integration. Real human support."`,
-      `Call to action: Prominent button or banner labeled "START" inviting the client to begin.`,
-      hasLockedTheme
-        ? `LAYOUT: Display the client logo (if attached) above the three statement cards using the template's native logo element. Use a solid or subtle gradient background using accent color ${themeAccent}. No generated images.`
-        : `LAYOUT: Display the client logo (if attached) above the three statement cards using the template's native logo element. Use a solid or subtle gradient background in the deck accent color. No generated images.`,
+      `Call to action: A clear START callout inviting the client to begin.`,
     ].join("\n"),
   );
 
-  // ===== Assemble.
-  const numberedSlides = slides
+  // ===== Assemble. Optional slideLimit truncates for a fast 1-slide preview.
+  const finalSlides = typeof slideLimit === "number" && slideLimit > 0
+    ? slides.slice(0, slideLimit)
+    : slides;
+  const numberedSlides = finalSlides
     .map((slideBody, i) => {
       const n = String(i + 1).padStart(2, "0");
       return `slide-${n}\n${slideBody}`;
     })
     .join("\n\n");
+  const slideCount = finalSlides.length;
 
   return [
     `Client: ${cn}`,
@@ -752,16 +742,9 @@ function buildPrompt(
       : "",
     "",
     "==================================================================",
-    "VISUAL STYLE",
-    "==================================================================",
-    hasLockedTheme
-      ? `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. LOCKED COLOR THEME: primary color ${themePrimary}, accent color ${themeAccent}. Use these exact colors on every slide for headings, accents, dividers, callouts, charts, and any branded highlights. Do not introduce other accent colors. Do not deviate from this palette. Build every slide using the template's native HTML editable elements: stat cards, scoreboards, two-column panels, timelines, donut and progress elements, text-card sequences, and icon rows from the template's built-in library. DO NOT call any external image generation model (GPT Image, DALL-E, Midjourney, Stable Diffusion, nano-banana, or any other). Do not generate raster images. Native HTML only. Keep the design polished and on-brand for ${cn}.`
-      : `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Build every slide using the template's native HTML editable elements: stat cards, scoreboards, two-column panels, timelines, donut and progress elements, text-card sequences, and icon rows from the template's built-in library. DO NOT call any external image generation model (GPT Image, DALL-E, Midjourney, Stable Diffusion, nano-banana, or any other). Do not generate raster images. Native HTML only. Keep the design polished and on-brand for ${cn}.`,
-    "",
-    "==================================================================",
     "DECK CONTENT",
     "==================================================================",
-    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. Each slide includes a LAYOUT line, follow it using the template's native HTML editable elements. Do not generate raster images.`,
+    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slide content below in order. Render each slide using this template's default styling. Do not add layout, typography, color, or chart directives beyond what is written here, just present the content cleanly.`,
     "",
     "BRAND VOICE RULES:",
     "- Never say 'Vendasta'. The CRM is always 'SMB Smart CRM' or 'SMB Solutions CRM'.",
@@ -781,7 +764,7 @@ function buildPrompt(
     "==================================================================",
     "DELIVERABLES",
     "==================================================================",
-    `- A complete slide deck in the Glamour template style, with the color theme drawn from the client logo.`,
+    `- ${slideCount} slide${slideCount === 1 ? "" : "s"} in this template's default style.`,
     `- A PDF copy of the deck.`,
     `- A PPTX copy of the deck.`,
   ]
@@ -801,6 +784,7 @@ export async function startManusDeck(
     themePrimary?: string;
     themeAccent?: string;
     resetTheme?: boolean;
+    slideLimit?: number;
   } = {},
 ): Promise<{ taskId: string; taskUrl?: string }> {
   const audit = await storage.getAudit(auditId);
@@ -846,7 +830,11 @@ export async function startManusDeck(
     }
   }
 
-  const prompt = buildPrompt(audit, report, { primary: themePrimary, accent: themeAccent });
+  const prompt = buildPrompt(audit, report, {
+    primary: themePrimary,
+    accent: themeAccent,
+    slideLimit: opts.slideLimit,
+  });
   const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
 
   let logoAdjusted = false;
@@ -873,10 +861,11 @@ export async function startManusDeck(
     }
   }
 
-  // Glamour is HTML-mode; no `model` field needed.
+  // Whiteboard template requires the nano-banana model.
   const body = JSON.stringify({
     message: { content },
     template_uid: TEMPLATE_UID,
+    model: MODEL,
   });
 
   const res = await fetch(`${MANUS_BASE}/v2/task.create`, {

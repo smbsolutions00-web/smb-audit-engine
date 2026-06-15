@@ -37,6 +37,7 @@ import {
   getPersistedLogoInfo,
   persistedLogoPath,
   clearPersistedLogo,
+  buildPrompt,
 } from "./manus-export";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
@@ -884,10 +885,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Optional flags from the form so the UI can reset stored state.
         const clearLogo = String(req.body?.clearLogo || "").toLowerCase() === "true";
         const resetTheme = String(req.body?.resetTheme || "").toLowerCase() === "true";
+        const slideLimitRaw = String(req.body?.slideLimit || "").trim();
+        const slideLimit = slideLimitRaw && /^\d+$/.test(slideLimitRaw)
+          ? Math.max(1, Math.min(50, parseInt(slideLimitRaw, 10)))
+          : undefined;
         const { taskId, taskUrl } = await startManusDeck(req.params.id, {
           logoDataUrl,
           clearLogo,
           resetTheme,
+          slideLimit,
         });
         res.json({ ok: true, taskId, taskUrl, status: "running" });
       } catch (err: any) {
@@ -956,6 +962,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       console.error("manus-logo delete error:", err);
       res.status(500).json({ message: err?.message || "Failed to clear logo" });
+    }
+  });
+
+  // Return the exact text we send to Manus so the user can paste it
+  // manually into Manus, click Create Slides > Whiteboard, and get the
+  // genuine nano-banana whiteboard output without burning API credits.
+  // Optional query: ?slides=N to truncate to the first N slides.
+  app.get("/api/audits/:id/manus-prompt", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const report: ReportData | null = audit.reportData
+        ? (JSON.parse(audit.reportData) as ReportData)
+        : null;
+      const slidesRaw = String(req.query.slides || "").trim();
+      const slideLimit = slidesRaw && /^\d+$/.test(slidesRaw)
+        ? Math.max(1, Math.min(50, parseInt(slidesRaw, 10)))
+        : undefined;
+      const prompt = buildPrompt(audit, report, { slideLimit });
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.send(prompt);
+    } catch (err: any) {
+      console.error("manus-prompt error:", err);
+      res.status(500).json({ message: err?.message || "Failed to build prompt" });
     }
   });
 

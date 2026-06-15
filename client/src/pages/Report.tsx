@@ -2846,13 +2846,14 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
     };
   }, [statusUrl]);
 
-  async function handleSend(opts: { resetTheme?: boolean } = {}) {
+  async function handleSend(opts: { resetTheme?: boolean; slideLimit?: number } = {}) {
     setSubmitting(true);
     setErrorMsg(null);
     try {
       const fd = new FormData();
       if (logo) fd.append("logo", logo);
       if (opts.resetTheme) fd.append("resetTheme", "true");
+      if (opts.slideLimit) fd.append("slideLimit", String(opts.slideLimit));
       const res = await fetch(startUrl, {
         method: "POST",
         credentials: "include",
@@ -2861,14 +2862,43 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
       toast({
-        title: "Sent to Manus",
-        description: "Generating the client-facing deck. This usually takes a few minutes.",
+        title: opts.slideLimit
+          ? `Sent to Manus, ${opts.slideLimit}-slide preview`
+          : "Sent to Manus",
+        description: opts.slideLimit
+          ? "Generating a quick preview so you can check the whiteboard style before running the full deck."
+          : "Generating the client-facing deck. This usually takes a few minutes.",
       });
       setState({ status: "running", taskId: json.taskId, taskUrl: json.taskUrl });
     } catch (err: any) {
       setErrorMsg(err?.message || "Could not start the Manus task.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Pull the exact prompt text and copy it to clipboard so the user can
+  // paste manually into Manus, click Create Slides > Whiteboard, and run
+  // the deck themselves without spending Manus API credits through us.
+  async function handleCopyPrompt(slideLimit?: number) {
+    try {
+      const qs = slideLimit ? `?slides=${slideLimit}` : "";
+      const res = await fetch(
+        `${API_BASE}/api/audits/${auditId}/manus-prompt${qs}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: slideLimit
+          ? `Copied ${slideLimit}-slide prompt`
+          : "Copied full prompt",
+        description:
+          "Paste it into Manus, click Create Slides, then Whiteboard. The nano-banana whiteboard style will render exactly as you saw before.",
+      });
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Could not copy the prompt.");
     }
   }
 
@@ -3367,9 +3397,36 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           </div>
         )}
 
-        {/* Send / Resend button */}
+        {/* Send / Resend buttons + whiteboard preview + copy-prompt fallback */}
         {!isRunning && (
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleCopyPrompt()}
+              disabled={submitting}
+              data-testid="button-copy-manus-prompt"
+              title="Copy the exact prompt to paste into Manus manually, then click Create Slides > Whiteboard."
+            >
+              Copy Prompt
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleSend({ slideLimit: 1 })}
+              disabled={submitting}
+              data-testid="button-send-to-manus-test"
+              title="Sends only slide 1 so you can confirm the whiteboard style before running the full deck."
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>Test 1 Slide</>
+              )}
+            </Button>
             <Button
               type="button"
               onClick={() => handleSend()}
