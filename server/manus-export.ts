@@ -28,8 +28,11 @@ import type { Audit, ReportData } from "@shared/schema";
 import { jsPDF } from "jspdf";
 
 const MANUS_BASE = "https://api.manus.ai";
-const TEMPLATE_UID = "whiteboard_c936ac40-1dc4-4f4f-b583-991de9f2dd08";
-const MODEL = "nano-banana";
+// Glamour HTML-mode template — fully editable text-based slides, much faster
+// than image-mode (nano-banana) and far smaller file sizes. Theme adapts to
+// the uploaded client logo automatically. Switched from whiteboard nano-banana
+// after image-mode runs took 15+ min and produced 80MB+ PDFs.
+const TEMPLATE_UID = "glamour_1a961063-1678-4c01-b3a5-e1d44a4f4522";
 const POLL_INTERVAL_MS = 8000;
 const POLL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes — Manus image-mode decks can take 5–15 min
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
@@ -148,28 +151,24 @@ function deckDir(auditId: string) {
 }
 
 /**
- * Build the Manus prompt using the SMB Solutions four-pillar format Dwayne
- * presents every time, rendered in nano-banana WHITEBOARD style.
+ * Build the Manus prompt for the Glamour HTML-mode template.
  *
- * Story arc (problems first, solutions second):
- *   1. Cover                              (whiteboard)
- *   2. The Path We Walk Together          (intro + agenda)
- *   3. Four Pillars, One Hub              (architecture overview, EARLY)
- *   4. Reality Check Scoreboard           (all 4 grades, gauges)
- *   5..N  AUDIT REALITY                  (problem-only slides, one per F/D pillar; B/C pillars consolidated)
- *   N+1   The Pattern                    (what all the problems have in common)
- *   N+2..N+5  THE ANSWER                 (one per pillar with dashboard mock; only for pillars that need fixing)
- *   N+6   SMB Smart CRM                  (STATIC unifier, dashboard mock)
- *   N+7   Your 90-Day Plan               (timeline)
- *   N+8   Let's Get To Work              (close)
+ * Fixed 10-slide structure, problem+solution combined per pillar:
+ *   1. Cover
+ *   2. Executive Summary (overall grade + 4 pillar scores)
+ *   3. The Four Pillars + CRM Hub (architecture overview)
+ *   4. AI & Automation (problem + solution combined)
+ *   5. SEO, Keywords & Listings (problem + solution combined)
+ *   6. Social Media (problem + solution combined)
+ *   7. Reputation (problem + solution combined)
+ *   8. SMB Smart CRM — The Operational Backbone (static)
+ *   9. Your 90-Day Plan
+ *   10. Let's Get To Work (CTA)
  *
- * CRITICAL: nano-banana renders each slide as a generated image. The
- * whiteboard template_uid alone does NOT guarantee whiteboard output;
- * prescriptive design instructions (columns, tables, palettes) override
- * the template. So this prompt deliberately AVOIDS layout / typography
- * direction and only uses whiteboard-native language: "hand-drawn arrow",
- * "sketched gauge", "highlighter circle", "marker handwriting", "sticky
- * note". Let nano-banana handle the rest.
+ * Glamour is an HTML-mode template, so Manus handles all layout, typography,
+ * and theming automatically. The prompt gives Manus the CONTENT and lets
+ * Manus extract a color theme from the uploaded client logo. No layout or
+ * style instructions — those override the template.
  */
 function buildPrompt(audit: Audit, report: ReportData | null): string {
   const cn = audit.clientName || "the client";
@@ -272,12 +271,6 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     ? `Google checks ${totalListings} directories to verify a business is real, local, and trustworthy. ${cn} is currently listed and accurate on only ${claimed} of those ${totalListings}.`
     : "";
 
-  // Helper for solution-slide dashboard mock language. Every solution slide
-  // must instruct nano-banana to sketch a laptop/monitor frame with a
-  // hand-drawn dashboard mockup inside (NOT a clean digital UI).
-  const dashboardMockSketch = (label: string) =>
-    `Sketch a laptop or monitor on the whiteboard with hand-drawn marker lines, and inside the screen sketch a ${label} dashboard mockup (bar charts drawn with marker, a donut chart drawn with marker, contact rows drawn with marker, all in classic whiteboard marker style). The dashboard should look like it was drawn on the whiteboard with markers, not pasted in as a real screenshot.`;
-
   const rankingLine = ranking
     .map(
       (k) =>
@@ -308,62 +301,77 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
   slides.push(
     [
       "COVER",
-      `Illustrated cartoon whiteboard scene (flat 2D digital illustration, NOT a photograph). Across the top in bold stylized hand-lettered black display font, the title "Digital Presence Audit". Underneath in a bold blue stylized hand-lettered font, the client name "${cn}". Underneath that in a smaller stylized font, the location "${loc}". On the lower right in red stylized handwriting, "Prepared by Dwayne Johnson, SMB Solutions". In one corner, a cartoon-illustrated yellow sticky note that reads "Faith-rooted strategy. Seamless integration. Real human support." If a client logo has been provided, draw it as a stylized illustrated card taped to the whiteboard in the upper-left corner with cartoon-drawn tape corners (not a photo composite, redraw the logo in the same illustrated style). Add a cartoon-drawn arrow swooping from the title down toward the rest of the board to suggest the journey ahead.`,
+      `Title: "Digital Presence Audit".`,
+      `Subtitle: "${cn}".`,
+      `Location line: "${loc}".`,
+      `Footer line: "Prepared by Dwayne Johnson, SMB Solutions".`,
+      `Tagline: "Faith-rooted strategy. Seamless integration. Real human support."`,
+      `If a client logo image was attached to this task, display it prominently on the cover and use it as the source of the deck's color theme across every slide.`,
     ].join("\n"),
   );
 
-  // ---------- SLIDE: Path We Walk Together ----------
+  // ---------- SLIDE: Executive Summary ----------
   slides.push(
     [
-      "THE PATH WE WALK TOGETHER",
-      `Illustrated cartoon whiteboard scene with the stylized hand-lettered title "The Path We Walk Together" in blue, underlined twice with a red marker stroke. Below the title, draw five cartoon-illustrated rounded rectangle boxes connected by cartoon-drawn arrows in this order: 1) "Where ${cn} Stands" 2) "What Is Working" 3) "What Is Being Missed" 4) "How We Fix It" 5) "Your Next 90 Days". Each box label is in stylized hand-lettered font. The arrows between boxes are cartoon-drawn, slightly imperfect for hand-drawn feel. In a corner, a cartoon yellow sticky note reads "This audit is a map, not a list of failures."`,
-    ].join("\n"),
+      "EXECUTIVE SUMMARY",
+      `Title: "Where ${cn} Stands Today".`,
+      overallGrade || overallScore !== null
+        ? `Headline: Overall Digital Presence Grade is ${overallGrade || ""}${overallScore !== null ? ` (${overallScore}/100)` : ""}.`
+        : "",
+      `Show the four pillar scores in a clean scoreboard layout:`,
+      ...pillarSlots.map(
+        (p) =>
+          `  - ${p.label}: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}`,
+      ),
+      problemPillars.length
+        ? `Closing line: "${problemPillars.length} of 4 pillars need focused attention. The opportunity is real, and the path forward is clear."`
+        : `Closing line: "All four pillars are healthy. The opportunity now is to sharpen, scale, and protect what is working."`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
 
-  // ---------- SLIDE: Four Pillars, One Hub (architecture, EARLY) ----------
+  // ---------- SLIDE: Four Pillars + CRM Hub ----------
   slides.push(
     [
       "FOUR PILLARS, ONE UNIFIED HUB",
-      `Illustrated cartoon whiteboard scene with the stylized hand-lettered title "Four Pillars, One Unified Hub" in bold black, underlined with blue and red strokes. In the center of the board, draw a large cartoon circle labeled "SMB Smart CRM" in green stylized lettering. Around that center circle, draw four labeled cartoon boxes connected with cartoon arrows: top-left "AI & Automation", top-right "SEO, Keywords & Listings", bottom-left "Social Media", bottom-right "Reputation". Each box has a small cartoon-illustrated icon next to its label (a robot face, a magnifying glass, a phone, a star). The four arrows all flow into the center CRM circle. At the bottom, in stylized hand-lettered font, "Every pillar feeds the one place that runs your business."`,
-    ].join("\n"),
-  );
-
-  // ---------- SLIDE: Reality Check Scoreboard ----------
-  slides.push(
-    [
-      "REALITY CHECK SCOREBOARD",
-      `Illustrated cartoon whiteboard scene with the stylized hand-lettered title "Where ${cn} Stands Today" in black, underlined in red. Below, draw four cartoon-illustrated speedometer gauges (flat colors with light hatching for shading), one per pillar, arranged across the board with the pillar name in stylized hand-lettered font under each gauge:`,
-      pillarSlots
-        .map(
-          (p) =>
-            `  - ${p.label}: gauge needle pointed at ${p.score ?? "?"}/100${p.grade ? ` (grade ${p.grade})` : ""}. Color the gauge arc with the appropriate marker: ${p.severity === "critical" ? "red marker, needle in the red zone" : p.severity === "weak" ? "orange marker, needle in the orange zone" : "green marker, needle in the green zone"}.`,
-        )
-        .join("\n"),
-      `Below the gauges, in handwritten red marker on a hand-drawn underline, write: "${problemPillars.length} of 4 pillars need urgent attention." In a corner, a sticky note reads "Honest numbers. Real opportunity."`,
+      `Title: "Four Pillars, One Unified Hub".`,
+      `Subtitle: "The architecture behind a business that runs without leaks."`,
+      `Show the four pillars arranged around a central hub labeled "SMB Smart CRM":`,
+      `  - AI & Automation`,
+      `  - SEO, Keywords & Listings`,
+      `  - Social Media`,
+      `  - Reputation`,
+      `Closing line: "Every pillar feeds the one place that runs your business."`,
     ].join("\n"),
   );
 
   // ====================================================================
-  // PROBLEM SLIDES - one per F/D pillar. NO solution language here.
+  // PILLAR SLIDES — one per pillar that needs work. Problem + Solution
+  // combined on the same slide. Pillars that are steady get a single
+  // consolidated "Where You Are Holding Ground" slide later.
   // ====================================================================
 
   for (const p of problemPillars) {
     if (p.key === "ai") {
       slides.push(
         [
-          "THE INVISIBLE COST: AI & AUTOMATION GAP",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black: "The Cost of Being Invisible to AI". Underneath in stylized font, the score: "${p.score ?? "?"}/100${p.grade ? ` (${p.grade})` : ""}".`,
-          `In the upper left, sketch six small phone-screen rectangles in marker, each labeled with an AI assistant name. Mark each NOT-cited platform with a hand-drawn red X over the screen, and each cited platform with a green check.`,
+          "AI & AUTOMATION",
+          `Title: "AI & Automation".`,
+          `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
+          `Section 1, The Gap:`,
           aiAbsent.length
-            ? `AI assistants where ${cn} is NOT cited (draw RED X): ${aiAbsent.map((a) => a.platform).join(", ")}.`
-            : "",
+            ? `  ${cn} is NOT cited on these AI assistants: ${aiAbsent.map((a) => a.platform).join(", ")}.`
+            : `  ${cn} is not cited on the major AI platforms audited.`,
           aiPresent.length
-            ? `AI assistants where ${cn} IS cited (draw GREEN CHECK): ${aiPresent.map((a) => a.platform).join(", ")}.`
-            : `${cn} is NOT cited on any of the six major AI platforms audited. Mark all six with red X.`,
-          `On the right side of the whiteboard, hand-write three problem statements in red marker, each preceded by a hand-drawn red X:`,
+            ? `  ${cn} IS cited on: ${aiPresent.map((a) => a.platform).join(", ")}.`
+            : "",
           ...(p.gaps || []).slice(0, 3).map((g) => `  - ${g}`),
-          `At the bottom in handwritten red marker, underlined twice: "Every search that goes to an AI today is a customer ${cn} cannot recover."`,
-          `IMPORTANT: this slide shows ONLY the problem. Do NOT mention SMB Solutions, AI Receptionist, Chat Agent, or any solution. The solution comes later.`,
+          `  Key insight: Every search that goes to an AI today is a customer ${cn} cannot recover.`,
+          `Section 2, The Answer:`,
+          `  A 24/7 AI Workforce that captures every lead and inquiry, across phone, chat, email, and social, and routes them into one unified inbox.`,
+          `  Core agents: AI Receptionist, Chat Agent, Support Agent, Follow-Up Agent, Routing Agent.`,
+          `  Outcome line: "Never miss a lead or customer inquiry again."`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -371,54 +379,51 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       continue;
     }
     if (p.key === "seo") {
-      // SEO gets up to TWO problem slides: keywords, and directories+NAP.
       slides.push(
         [
-          "WHO IS FINDING YOU vs WHO IS BEING MISSED",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black: "Who Is Finding ${cn}, And Who Is Being Missed". Down the left side, in green stylized hand-lettered font under the header "Currently Ranking (people who already know your name)", list:`,
+          "SEO, KEYWORDS & LISTINGS",
+          `Title: "SEO, Keywords & Listings".`,
+          `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
+          `Section 1, The Gap:`,
           rankingLine
-            ? `  ${ranking.map((k) => `${k.keyword}${k.position ? ` (#${k.position})` : ""}${k.volume ? `, ${k.volume.toLocaleString()}/mo` : ""}`).join("\n  ")}`
-            : "  (no keywords ranking today)",
-          `Down the right side, under the hand-drawn red-marker header "NOT Ranking (people searching but going to competitors)", list these opportunity keywords with a red marker X next to each:`,
+            ? `  Currently ranking for: ${ranking.map((k) => `${k.keyword}${k.position ? ` (#${k.position})` : ""}${k.volume ? `, ${k.volume.toLocaleString()}/mo` : ""}`).join("; ")}.`
+            : `  No keywords are currently ranking.`,
           opportunityLine
-            ? `  ${opportunity.map((k) => `${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()}/mo)` : ""}`).join("\n  ")}`
-            : "  (no opportunity data)",
-          totalOpportunityVolume
-            ? `At the bottom of the whiteboard, in a hand-drawn red highlighter rectangle: "${totalOpportunityVolume.toLocaleString()} people per month are searching for exactly what ${cn} sells in ${loc}, and going to competitors."`
+            ? `  Searches going to competitors: ${opportunity.map((k) => `${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()}/mo)` : ""}`).join("; ")}.`
             : "",
-          `Sketch a hand-drawn arrow in red marker pointing from the left column to the right column with a question mark above it. Do NOT mention any fix or solution. This slide is the problem only.`,
+          totalOpportunityVolume
+            ? `  Headline: ${totalOpportunityVolume.toLocaleString()} people per month are searching for what ${cn} sells in ${loc} and going to competitors.`
+            : "",
+          totalListings
+            ? `  Directory trust: Google checks ${totalListings} directories. ${cn} is currently listed and accurate on only ${claimed} of ${totalListings}.`
+            : "",
+          napScore !== undefined
+            ? `  NAP Consistency Score: ${napScore}/100. When name, address, and phone do not match across the web, Google stops trusting the business.`
+            : "",
+          missingLine ? `  Notable missing directories: ${missingLine}.` : "",
+          `Section 2, The Answer:`,
+          `  Be found everywhere customers search: Local SEO, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization).`,
+          `  Claim and standardize every directory listing. Rebuild NAP consistency. Publish content that targets the highest-volume opportunity keywords.`,
+          `  Outcome line: "Be the answer Google AND AI engines pick first."`,
         ]
           .filter(Boolean)
           .join("\n"),
       );
-
-      if (totalListings) {
-        slides.push(
-          [
-            "THE DIRECTORY TRUST GAP",
-            `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black: "Google Checks ${totalListings} Directories. ${cn} Is On Only ${claimed}."`,
-            `In the center of the board, draw a large cartoon-illustrated donut/pie chart. Color ${Math.round(((totalListings - claimed) / totalListings) * 100)}% of the donut in flat red with light hatching (the missing portion) and ${Math.round((claimed / totalListings) * 100)}% in flat green with light hatching (the claimed portion). In the middle of the donut, in big stylized hand-lettered font, the number "${claimed}/${totalListings}".`,
-            `To the right of the donut, hand-list a few notable missing directories in red marker, each with a hand-drawn red X: ${missingLine || "(see audit report)"}.`,
-            napScore !== undefined
-              ? `Below the donut, in handwritten red marker on a hand-drawn underline: "NAP Consistency Score: ${napScore}/100. When your name, address, and phone number do not match across the web, Google stops trusting that you exist."`
-              : `Below the donut, in handwritten red marker on a hand-drawn underline: "Every unclaimed directory is a door ${cn} left unlocked for a competitor."`,
-            `In a corner, sketch a small sticky note that reads "NAP = Name, Address, Phone. Google's #1 local trust signal." Do NOT mention any fix or solution on this slide.`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-      }
       continue;
     }
     if (p.key === "social") {
       slides.push(
         [
-          "THE SOCIAL MEDIA WORKLOAD PROBLEM",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black: "Where ${cn} Shows Up, And Where The Workload Is Breaking". Down the left side, in green stylized hand-lettered font under header "What Is Working", list:`,
-          ...((p.strengths || []).slice(0, 3).map((s) => `  - ${s}`) || []),
-          `Down the right side, in red stylized hand-lettered font under header "What Is Being Missed", list each with a cartoon red X:`,
-          ...((p.gaps || []).slice(0, 3).map((g) => `  - ${g}`) || []),
-          `At the bottom in handwritten red marker: "Manual posting on every platform every week is unsustainable. This is where burnout starts." Do NOT propose a fix yet.`,
+          "SOCIAL MEDIA",
+          `Title: "Social Media".`,
+          `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
+          `Section 1, The Gap:`,
+          ...((p.strengths || []).slice(0, 3).map((s) => `  - What is working: ${s}`)),
+          ...((p.gaps || []).slice(0, 3).map((g) => `  - What is being missed: ${g}`)),
+          `  Key insight: Manual posting on every platform every week is unsustainable. This is where burnout starts.`,
+          `Section 2, The Answer:`,
+          `  An AI-assisted content calendar across Facebook, Instagram, TikTok, and LinkedIn. Posts drafted, scheduled, and tracked from one dashboard.`,
+          `  Outcome line: "Stay visible and relevant without constant manual effort."`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -428,11 +433,16 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     if (p.key === "reputation") {
       slides.push(
         [
-          "THE REPUTATION RISK",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black: "Your Reputation Is Working. Your System Is Not.". On the left, draw a cartoon five-star row in flat green with light hatching, with the score "${p.score ?? "?"}/100" in stylized hand-lettered font underneath.`,
-          ...((p.strengths || []).slice(0, 2).map((s) => `What is working (write in green marker with a check): "${s}"`)),
-          ...((p.gaps || []).slice(0, 3).map((g) => `What is being missed (write in red marker with a red X): "${g}"`)),
-          `At the bottom in red stylized hand-lettered font: "Stars do not collect themselves. Without a system to ask, follow up, and respond, the next ten reviews could go either way." No solution language on this slide.`,
+          "REPUTATION",
+          `Title: "Reputation".`,
+          `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
+          `Section 1, The Gap:`,
+          ...((p.strengths || []).slice(0, 2).map((s) => `  - What is working: ${s}`)),
+          ...((p.gaps || []).slice(0, 3).map((g) => `  - What is being missed: ${g}`)),
+          `  Key insight: Stars do not collect themselves. Without a system to ask, follow up, and respond, the next ten reviews could go either way.`,
+          `Section 2, The Answer:`,
+          `  A reputation system: automated review requests after every transaction, fast review responses, and 5-star reviews flowing into Google Business Profile on a steady cadence.`,
+          `  Outcome line: "Turn trust into more calls, bookings, and sales."`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -441,102 +451,36 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     }
   }
 
-  // Steady (B/C) pillars get a single consolidated "Holding Ground" slide.
+  // Steady (B/C/A) pillars get a single consolidated "Holding Ground" slide.
   if (steadyPillars.length) {
     slides.push(
       [
         "WHERE YOU ARE HOLDING GROUND",
-        `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in green: "Where ${cn} Is Holding Ground". For each steady pillar listed below, draw a cartoon green check mark and write the pillar label and score in green stylized hand-lettered font, followed by one short observation:`,
+        `Title: "Where ${cn} Is Holding Ground".`,
+        `Subtitle: "Real strengths we protect while we fix what is broken."`,
         ...steadyPillars.map(
           (p) =>
-            `  - ${p.label} (${p.score ?? "?"}/100${p.grade ? `, ${p.grade}` : ""}): ${p.summary || "steady performance"}`,
+            `  - ${p.label} (${p.score ?? "?"}/100${p.grade ? `, Grade ${p.grade}` : ""}): ${p.summary || "steady performance"}`,
         ),
-        `At the bottom, in handwritten marker: "These are real strengths. We protect them while we fix what is broken."`,
       ].join("\n"),
     );
-  }
-
-  // ---------- SLIDE: The Pattern ----------
-  slides.push(
-    [
-      "THE PATTERN BEHIND THE PROBLEMS",
-      `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in red: "The Pattern Behind The Problems". In the center of the board, draw three large overlapping cartoon circles like a Venn diagram, each labeled in stylized hand-lettered font: "Manual", "Reactive", "Leaking Customers". Where the three circles overlap in the center, write "${cn} Today" in red stylized hand-lettered font.`,
-      `On the right side of the board, hand-write in red marker: "Every pillar that is weak today has the same root cause: there is no system running underneath it. The work happens manually. The follow-up happens late. The opportunity slips out the back door."`,
-      `At the bottom in big black stylized hand-lettered font, underlined: "What changes everything is the system underneath. That is what we build next."`,
-    ].join("\n"),
-  );
-
-  // ====================================================================
-  // SOLUTION SLIDES - one per pillar that needs fixing. Dashboard mocks.
-  // ====================================================================
-
-  for (const p of problemPillars) {
-    if (p.key === "ai") {
-      slides.push(
-        [
-          "THE ANSWER: YOUR 24/7 AI WORKFORCE",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in green: "Your 24/7 AI Workforce". On the left of the board, draw a column of five cartoon-illustrated boxes labeled top to bottom: "AI Receptionist", "Chat Agent", "Support Agent", "Follow-Up Agent", "Routing Agent". Each box has a small cartoon-illustrated icon (phone, chat bubble, headset, envelope, branching arrow).`,
-          `On the right side, ${dashboardMockSketch("unified AI inbox / agent activity")} The dashboard should show sketched columns labeled "Calls Captured", "Chats Answered", "Follow-ups Sent", "Leads Routed". Hand-drawn arrows connect each AI agent box on the left to the dashboard on the right.`,
-          `At the bottom in green stylized hand-lettered font: "Never miss a lead or customer inquiry again."`,
-        ].join("\n"),
-      );
-      continue;
-    }
-    if (p.key === "seo") {
-      slides.push(
-        [
-          "THE ANSWER: BE FOUND EVERYWHERE THEY SEARCH",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in green: "Be Found Everywhere They Search". On the left, three labeled cartoon blocks in stylized hand-lettered font: "Local SEO", "AEO (Answer Engine Optimization)", "GEO (Generative Engine Optimization)". Beside each block, a small cartoon-illustrated icon: a map pin, a question-mark bubble, a small AI-chip.`,
-          `On the right, ${dashboardMockSketch("keyword ranking and directory listings")} The dashboard should show sketched rows of keywords with rising green arrows, and a sketched checklist of directory names with green check marks appearing one by one.`,
-          totalListings
-            ? `Include a hand-drawn note that says: "${totalListings} directories standardized. ${totalOpportunityVolume.toLocaleString()} monthly searches recovered."`
-            : "",
-          `At the bottom in green stylized hand-lettered font: "Be the answer Google AND AI engines pick first."`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
-      continue;
-    }
-    if (p.key === "social") {
-      slides.push(
-        [
-          "THE ANSWER: SOCIAL THAT RUNS WITHOUT BURNOUT",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in green: "Social That Runs Without Burnout". On the left, four cartoon-illustrated platform icons stacked vertically (Facebook, Instagram, TikTok, LinkedIn) with cartoon arrows feeding into a single central cartoon calendar box labeled "AI-assisted content calendar".`,
-          `On the right, ${dashboardMockSketch("social media content calendar with scheduled posts")} The dashboard shows a sketched month-view calendar with little colored marker squares on different days representing scheduled posts, and a sidebar showing "Posts Drafted", "Posts Scheduled", "Engagement Replies".`,
-          `At the bottom in green stylized hand-lettered font: "Stay visible and relevant without constant manual effort."`,
-        ].join("\n"),
-      );
-      continue;
-    }
-    if (p.key === "reputation") {
-      slides.push(
-        [
-          "THE ANSWER: A REPUTATION SYSTEM",
-          `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in green: "A Reputation System, Not A Reputation Hope". On the left, a cartoon-illustrated flow: customer pays > automated review request sent > review captured > 5-star reviews flow into Google Business Profile.`,
-          `On the right, ${dashboardMockSketch("reputation management with reviews and ratings")} The dashboard shows a sketched star-rating average, a sketched bar chart of reviews-per-month rising, and a column of recent review cards with sketched five-star rows on each.`,
-          `At the bottom in green stylized hand-lettered font: "Turn trust into more calls, bookings, and sales."`,
-        ].join("\n"),
-      );
-      continue;
-    }
   }
 
   // ---------- SLIDE: SMB Smart CRM (STATIC, locked content) ----------
   slides.push(
     [
-      "SMB SMART CRM: THE OPERATIONAL BACKBONE",
-      `STATIC SLIDE. Illustrated cartoon whiteboard scene. Stylized hand-lettered title in bold black: "SMB Smart CRM: Built for Small Businesses". Subtitle in blue stylized hand-lettered font: "The Centralized Operational Backbone of Your Business".`,
-      `On the left side, sketch six handwritten lines in marker, each preceded by a hand-drawn green check mark, in this exact order:`,
+      "SMB SMART CRM",
+      `STATIC SLIDE. Do not improvise the content below.`,
+      `Title: "SMB Smart CRM".`,
+      `Subtitle: "The Centralized Operational Backbone of Your Business."`,
+      `Six core capabilities (in this order):`,
       `  1. Capture and organize leads from calls, forms, chat, and messages`,
       `  2. Track every interaction in one unified customer timeline`,
       `  3. Manage sales stages, pipelines, and opportunities visually`,
       `  4. Automate follow-ups, reminders, and task assignments`,
       `  5. Sync seamlessly with email, SMS, and scheduling tools`,
-      `  6. Result: Keep your business organized, responsive, and growing.`,
-      `On the right side, ${dashboardMockSketch("complete CRM with contacts, pipeline revenue, deals by stage, recent activity, and contact 360 view")} The dashboard should clearly show four sketched tiles: "Contacts" with a number, "Pipeline Revenue" with a dollar figure, "Deals by Stage" with a hand-drawn donut, and "Recent Activity" with stacked rows.`,
-      `At the bottom in handwritten marker across the full width: "Built around four pillars, connected through one unified client hub."`,
-      `Do NOT improvise this content. Keep the six bullets identical to what is listed above.`,
+      `  6. Keep your business organized, responsive, and growing`,
+      `Closing line: "Built around four pillars, connected through one unified client hub."`,
     ].join("\n"),
   );
 
@@ -544,12 +488,12 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
   slides.push(
     [
       "YOUR 90-DAY PLAN",
-      `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in black, underlined with blue and red strokes: "Your Next 90 Days". Across the bottom of the board, draw a cartoon horizontal timeline with three milestones labeled "Day 30", "Day 60", "Day 90". Each milestone is a small cartoon dot on the timeline.`,
-      `Above the timeline, hand-draw three labeled boxes in marker connected to each milestone:`,
-      `  - Phase 1 (Days 1-30): Foundation. Hand-write the highest-priority fix from the audit (typically: claim and standardize directory listings, fix NAP, set up review collection).`,
-      `  - Phase 2 (Days 31-60): Activation. Hand-write the second priority (typically: launch AI workforce, activate review automation, activate social calendar).`,
-      `  - Phase 3 (Days 61-90): Acceleration. Hand-write the long-term build (typically: keyword content build-out, authority/links, reporting cadence).`,
-      `In a corner, a cartoon yellow sticky note that reads "No overwhelm. Right tools, right support, right pace." At the bottom in green stylized hand-lettered font: "Each step can be completed without adding stress to your week. That is what SMB Solutions is here for."`,
+      `Title: "Your Next 90 Days".`,
+      `Subtitle: "No overwhelm. Right tools, right support, right pace."`,
+      `Phase 1 (Days 1 to 30), Foundation: claim and standardize directory listings, fix NAP, set up review collection.`,
+      `Phase 2 (Days 31 to 60), Activation: launch the AI workforce, activate review automation, activate the social content calendar.`,
+      `Phase 3 (Days 61 to 90), Acceleration: keyword content build out, authority and link building, reporting cadence.`,
+      `Closing line: "Each step can be completed without adding stress to your week. That is what SMB Solutions is here for."`,
     ].join("\n"),
   );
 
@@ -557,12 +501,13 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
   slides.push(
     [
       "LET'S GET TO WORK",
-      `Illustrated cartoon whiteboard scene. Stylized hand-lettered title in big black, underlined twice: "Let's Get To Work". Below the title, three cartoon-illustrated labeled boxes connected with cartoon arrows:`,
-      `  - "THE VERDICT": handwritten in red marker: "The foundation is real. The gaps are fixable. The opportunity is now."`,
-      `  - "THE FOCUS": handwritten in blue marker: "Pillar fixes, dashboards, real human support."`,
-      `  - "THE OUTCOME": handwritten in green marker: "A predictable, scalable system for capturing and keeping customers."`,
-      `Below the boxes, hand-draw a green-marker "START" button shape in the bottom-center with a green checkmark sketched inside it. Around it, draw red marker arrows pointing inward at the START button from all directions to emphasize urgency.`,
-      `In a corner of the whiteboard, a cartoon yellow sticky note reads "Faith-rooted strategy. Seamless integration. Real human support." In another corner, a cartoon-illustrated taped card with the client logo (if provided) and a small "SMB Solutions" wordmark, both redrawn in the illustrated style.`,
+      `Title: "Let's Get To Work".`,
+      `Three closing statements:`,
+      `  - The Verdict: "The foundation is real. The gaps are fixable. The opportunity is now."`,
+      `  - The Focus: "Pillar fixes, dashboards, real human support."`,
+      `  - The Outcome: "A predictable, scalable system for capturing and keeping customers."`,
+      `Tagline: "Faith-rooted strategy. Seamless integration. Real human support."`,
+      `Call to action: Prominent button or banner labeled "START" inviting the client to begin.`,
     ].join("\n"),
   );
 
@@ -585,45 +530,35 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       : "",
     "",
     "==================================================================",
-    "VISUAL STYLE - READ THIS FIRST. THIS OVERRIDES EVERYTHING.",
+    "VISUAL STYLE",
     "==================================================================",
-    "Every single slide in this deck MUST be rendered as an ILLUSTRATED WHITEBOARD SCENE in a flat 2D digital cartoon style. Think of a digital marker illustration: the whiteboard is drawn (not photographed), the marker writing is stylized hand-lettered display fonts (not real handwriting and not photographed marker strokes), the doodles are crisp flat-colored cartoon drawings with light hatching for shading (lightbulbs, targets, gauges, arrows, sticky notes), and the colors are bold and clean. The aesthetic is a polished hand-drawn illustration of a whiteboard that you would see in a modern strategy deck, NOT a real-world photograph of a whiteboard in an office.",
-    "",
-    "This is the Manus 'Whiteboard' nano-banana template. Render the illustrated cartoon whiteboard aesthetic on EVERY slide. Do NOT produce clean digital slides, brand-styled slide templates, brown-on-cream typography slides, navy-and-green corporate slides, OR a photorealistic photograph of a real whiteboard. NEVER photorealistic. NEVER a photo. If a slide looks like either a clean corporate slide OR a real-world photo, you have drifted from the template and must restart that slide in flat illustrated cartoon style.",
-    "",
-    "DO NOT use any of the following: serif typography for titles, two-column corporate layouts, table grids, donut charts that look like clean Figma vectors, percent rings that look like clean Figma vectors, brand color blocks, gradients, soft drop shadows, photorealistic lighting, real lens reflections on the board, real marker tray photos. EVERYTHING is drawn in a flat illustrated cartoon style on top of a drawn whiteboard.",
-    "",
-    "WHEN this prompt describes a chart, dashboard, or visual: it must be drawn in the same illustrated cartoon style as the rest of the board. A donut chart is two arcs of flat color around a circle with light marker hatching. A bar chart is cartoon-drawn bars with hatched shading. A dashboard is a cartoon-drawn laptop frame with cartoon UI elements inside. None of these are real digital screenshots, and none of these are photos of real marker strokes either.",
-    "",
-    `If a client logo has been attached, draw it as a stylized illustrated card taped to the whiteboard, with cartoon-drawn tape corners. The logo card is drawn into the scene, not photo-composited. Do not embed it as a clean vector. Do not paste it as a pristine real logo. Do not render it as a photograph. Re-draw it in the same illustrated style as the rest of the board.`,
+    `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}.`,
     "",
     "==================================================================",
-    "DECK CONTENT - what each slide is about.",
+    "DECK CONTENT",
     "==================================================================",
-    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. The deck has ${slideCount} slides. Do not skip any. Do not reorder.`,
-    "",
-    "The deck tells a story in this order: introduce the journey, show where they stand, walk through every problem the audit found (NO solution language during the problem section), pause and name the pattern across the problems, then walk through the answer one pillar at a time WITH a sketched dashboard mockup on each solution slide, then SMB Smart CRM as the unifier, then the 90-day plan, then a closing call to action.",
+    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. You may add visual elements like icons, dashboard mockups, charts, or pillar diagrams where they make the content clearer, in keeping with the Glamour template's style.`,
     "",
     "BRAND VOICE RULES:",
-    "- Never say 'Vendasta'. The CRM is 'SMB Smart CRM' or 'SMB Solutions CRM'.",
+    "- Never say 'Vendasta'. The CRM is always 'SMB Smart CRM' or 'SMB Solutions CRM'.",
     "- The audit is a 'Digital Presence Audit', never a 'website audit'.",
     "- No em-dashes (\u2014). No en-dashes (\u2013). Use periods, commas, or parentheses.",
     "- Brand voice: faith-rooted strategy, seamless integration, real human support.",
+    "- Author signature on the cover and close: \"Dwayne Johnson, SMB Solutions\".",
     "",
     directoriesAuditedLine,
     "",
     "==================================================================",
-    "SLIDES (in order, each rendered as an illustrated cartoon whiteboard scene):",
+    "SLIDES (in order):",
     "==================================================================",
     "",
     numberedSlides,
     "",
     "==================================================================",
-    "DELIVERABLES:",
+    "DELIVERABLES",
     "==================================================================",
-    `- ${slideCount} slides, each rendered as an individual PNG in the illustrated cartoon whiteboard style (flat colors, stylized hand-lettered fonts, cartoon doodles, NOT a real-world photograph), bundled in a single zip file labeled slide-01.png through slide-${String(slideCount).padStart(2, "0")}.png.`,
-    "- One PDF containing all slides in order.",
-    "- Before finishing, verify every slide is in the illustrated cartoon whiteboard style. If any slide looks like a clean corporate digital design OR like a real-world photograph of a physical whiteboard, regenerate that slide in the illustrated cartoon style.",
+    `- A complete slide deck in the Glamour template style, with the color theme drawn from the client logo.`,
+    `- A PDF copy of the deck.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -664,10 +599,12 @@ export async function startManusDeck(
     }
   }
 
+  // Glamour is an HTML-mode template, so no `model` field is needed (model is
+  // only required for image-mode templates like nano-banana). Manus picks the
+  // right backend automatically based on template_uid.
   const body = JSON.stringify({
     message: { content },
     template_uid: TEMPLATE_UID,
-    model: MODEL,
   });
 
   const res = await fetch(`${MANUS_BASE}/v2/task.create`, {
