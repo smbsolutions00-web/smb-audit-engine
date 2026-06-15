@@ -31,6 +31,7 @@ import {
   reconcileManusState,
   deckZipPath,
   deckPdfPath,
+  deckPptxPath,
   deckExists,
   deckPdfFilePath,
 } from "./manus-export";
@@ -898,7 +899,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!state) return res.json({ status: "idle" });
       const hasZip = deckExists(deckZipPath(req.params.id));
       const hasPdf = deckExists(deckPdfPath(req.params.id));
-      res.json({ ...state, hasZip, hasPdf });
+      const hasPptx = deckExists(deckPptxPath(req.params.id));
+      res.json({ ...state, hasZip, hasPdf, hasPptx });
     } catch (err: any) {
       console.error("manus-status error:", err);
       res.status(500).json({ message: err?.message || "Failed to read Manus status" });
@@ -953,6 +955,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       createReadStream(p).pipe(res);
     } catch (err: any) {
       console.error("manus-deck-pdf error:", err);
+      res.status(500).json({ message: err?.message || "Download failed" });
+    }
+  });
+
+  app.get("/api/audits/:id/manus-deck-pptx", async (req, res) => {
+    try {
+      const audit = await storage.getAudit(req.params.id);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const p = deckPptxPath(req.params.id);
+      if (!existsSync(p)) {
+        return res.status(404).json({ message: "PowerPoint deck not ready yet." });
+      }
+      const slug = (audit.clientName || "audit")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "audit";
+      const stat = statSync(p);
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      );
+      res.setHeader("Content-Length", stat.size.toString());
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${slug}-client-facing-deck.pptx"`,
+      );
+      createReadStream(p).pipe(res);
+    } catch (err: any) {
+      console.error("manus-deck-pptx error:", err);
       res.status(500).json({ message: err?.message || "Download failed" });
     }
   });

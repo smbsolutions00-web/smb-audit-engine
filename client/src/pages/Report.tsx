@@ -2775,9 +2775,11 @@ type ManusDeckState = {
   error?: string;
   hasZip?: boolean;
   hasPdf?: boolean;
+  hasPptx?: boolean;
   slideCount?: number;
   startedAt?: number;
   completedAt?: number;
+  logoAdjusted?: boolean;
 };
 
 function ClientFacingDeckCard({ auditId }: { auditId: string }) {
@@ -2793,6 +2795,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
   const statusUrl = `${API_BASE}/api/audits/${auditId}/manus-status`;
   const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
   const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
+  const pptxUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pptx`;
 
   // Initial load + polling loop.
   useEffect(() => {
@@ -3118,8 +3121,25 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                     </a>
                   </Button>
                 )}
+                {state.hasPptx && (
+                  <Button
+                    asChild
+                    variant="outline"
+                    data-testid="button-download-deck-pptx"
+                  >
+                    <a href={pptxUrl} target="_blank" rel="noopener noreferrer">
+                      <FileDown className="mr-1.5 h-4 w-4" />
+                      Download PowerPoint
+                    </a>
+                  </Button>
+                )}
               </div>
             </div>
+            {state.logoAdjusted && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
+                Your logo had dark text on a dark or transparent background, so we placed it on a white card before sending. It will look crisp against the deck theme.
+              </div>
+            )}
             {/* One-click ElevenLabs script generation from the deck PDF.
                 Skips the manual upload step in the Final Deliverable section. */}
             <div className="mt-1 flex flex-col gap-2 border-t border-emerald-500/20 pt-3 sm:flex-row sm:items-center sm:justify-between">
