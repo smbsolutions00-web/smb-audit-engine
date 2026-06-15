@@ -678,17 +678,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .replace(/^-|-$/g, "") || "audit";
       const filename = `${slug}-elevenlabs-dj2-script.txt`;
 
-      // Pull the latest script_generated event timestamp so the UI can show
-      // "Generated Jun 14 at 6:07 PM" instead of an empty value.
+      // Pull the latest script_generated AND script_edited timestamps so the
+      // UI can show "Generated Jun 14 at 6:07 PM" and know whether the cached
+      // copy is the auto-generated version or a user-edited version.
       let lastGeneratedAt: number | undefined;
+      let lastEditedAt: number | undefined;
       try {
         const eventsRaw = audit.eventLog ? JSON.parse(audit.eventLog) : [];
         if (Array.isArray(eventsRaw)) {
-          for (let i = eventsRaw.length - 1; i >= 0; i--) {
-            const ev = eventsRaw[i];
+          for (const ev of eventsRaw) {
             if (ev?.type === "script_generated" && ev?.at) {
-              lastGeneratedAt = new Date(ev.at).getTime();
-              break;
+              const t = new Date(ev.at).getTime();
+              if (!lastGeneratedAt || t > lastGeneratedAt) lastGeneratedAt = t;
+            } else if (ev?.type === "script_edited" && ev?.at) {
+              const t = new Date(ev.at).getTime();
+              if (!lastEditedAt || t > lastEditedAt) lastEditedAt = t;
             }
           }
         }
@@ -696,14 +700,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         /* eventLog parse errors are non-fatal */
       }
 
-      // If we have a saved edited script and the caller is NOT forcing a
-      // regeneration, serve it verbatim. This is the path the View/Edit modal
-      // uses on subsequent opens, and it's also what Download uses by default.
+      // If we have a saved script (either freshly generated and cached, or
+      // user-edited) and the caller is NOT forcing a regeneration, serve it
+      // verbatim. The `edited` flag is true only if the user actually edited
+      // after the last generation, never just because the script is cached.
       if (audit.editedScript && !forceRegenerate) {
+        const isUserEdited = !!(lastEditedAt && (!lastGeneratedAt || lastEditedAt > lastGeneratedAt));
         if (wantsJson) {
           return res.json({
             script: audit.editedScript,
-            edited: true,
+            edited: isUserEdited,
             filename,
             generatedAt: lastGeneratedAt,
           });
@@ -757,6 +763,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // slide boundaries so it's easy to paste into ElevenLabs.
       const script = chunkScriptForElevenLabs(rawScript, 5000);
 
+      // Persist the freshly generated script so the next View/Edit open
+      // serves it instantly instead of paying 20+ seconds and LLM credits
+      // to regenerate. We mark it as not-yet-edited via the event log
+      // (script_generated happens AFTER persistence, and any future
+      // script_edited event proves the user touched it). This avoids the
+      // bug where an unedited script was never cached and every reopen
+      // triggered a fresh expensive regenerate.
+      await storage.updateAudit(req.params.id, { editedScript: script });
       await storage.appendEvent(req.params.id, "script_generated", {
         regenerated: forceRegenerate,
         chars: script.length,
