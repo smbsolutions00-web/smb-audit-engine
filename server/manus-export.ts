@@ -456,8 +456,8 @@ function buildPrompt(
       `Footer line: "Prepared by Dwayne Johnson, SMB Solutions".`,
       `Tagline: "Faith-rooted strategy. Seamless integration. Real human support."`,
       hasLockedTheme
-        ? `IMAGERY: If a client logo image was attached to this task, display it prominently and centered on the cover. Use primary color ${themePrimary} and accent color ${themeAccent} across every slide. These colors are locked, do not deviate from them.`
-        : `IMAGERY: If a client logo image was attached to this task, display it prominently and centered on the cover. Use it as the source of the deck's color theme across every slide. Pull a primary brand color and one or two accent colors from the logo and apply them consistently.`,
+        ? `LAYOUT: If a client logo image was attached to this task, display it prominently and centered on the cover using the Glamour template's native logo element. Use primary color ${themePrimary} and accent color ${themeAccent} across every slide. These colors are locked, do not deviate from them.`
+        : `LAYOUT: If a client logo image was attached to this task, display it prominently and centered on the cover using the Glamour template's native logo element. Use it as the source of the deck's color theme across every slide. Pull a primary brand color and one or two accent colors from the logo and apply them consistently.`,
     ].join("\n"),
   );
 
@@ -474,7 +474,7 @@ function buildPrompt(
         (p) =>
           `  - ${p.label}: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}`,
       ),
-      `IMAGERY: A 2x2 scoreboard with grade badges and percentage rings or progress bars for each pillar. Color the rings by severity: red for F, orange for D, yellow for C, green for B/A.`,
+      `LAYOUT: Use the Glamour template's native scoreboard or stat-card layout, four pillar cards arranged in a 2x2 grid, each card showing the grade letter badge and percentage. Color the badges by severity using the template's built-in color palette. Do not generate a raster image, use native HTML elements only.`,
       problemPillars.length
         ? `Closing line: "${problemPillars.length} of 4 pillars need focused attention. The opportunity is real, and the path forward is clear."`
         : `Closing line: "All four pillars are healthy. The opportunity now is to sharpen, scale, and protect what is working."`,
@@ -522,7 +522,7 @@ function buildPrompt(
           `  A 24/7 AI Workforce that captures every lead and inquiry, across phone, chat, email, and social, and routes them into one unified inbox.`,
           `  Core agents: AI Receptionist, Chat Agent, Support Agent, Follow-Up Agent, Routing Agent.`,
           `  Outcome line: "Never miss a lead or customer inquiry again."`,
-          `IMAGERY: A row of small 2D agent icons (headset for Receptionist, chat bubble for Chat Agent, lifebuoy for Support, clock for Follow-Up, branching arrows for Routing). Also a small panel showing logos of the AI assistants checked (ChatGPT, Gemini, Claude, Perplexity), with green check or red X overlays based on the data above. Render the bullet list above as visible text cards on the slide, do not leave the body area empty.`,
+          `LAYOUT: Render the bullet lists above as visible text cards or two-column panels using the template's native elements. Do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -550,7 +550,7 @@ function buildPrompt(
           `  Be the answer Google AND AI engines pick first. Local SEO, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization), tuned to the highest-volume opportunity keywords above.`,
           `  Publish targeted content, optimize on-page signals, and earn citations.`,
           `  Outcome line: "Capture the searches your competitors are winning today."`,
-          `IMAGERY: Build a two-column comparison panel, no SERP mockup, no bar chart with invented labels.`,
+          `LAYOUT: Build a two-column comparison panel using the template's native two-column element. No SERP mockup, no bar chart with invented labels, no generated image.`,
           `  LEFT COLUMN header "WHERE YOU RANK". Render one card per ranking keyword below using these EXACT strings (do not paraphrase, do not invent additional rows):`,
           ...ranking.map(
             (k) =>
@@ -583,7 +583,7 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  Claim and standardize every directory listing. Rebuild NAP consistency across the top 50+ citation sources. Lock down Google Business Profile, Bing Places, Apple Maps, and major industry directories.`,
           `  Outcome line: "Show up everywhere customers look, with the same name, address, and phone."`,
-          `IMAGERY: A donut chart on the left showing "${claimed} of ${totalListings} directories accurate" as a partially-filled ring. On the right, a stacked list of common directory logos (Google Business Profile, Yelp, Bing, Apple Maps, Facebook, Yellow Pages) each with a green check or red X based on listed/missing status. Optional small map pin icon to reinforce local.`,
+          `LAYOUT: Use the template's native donut or progress element on the left showing "${claimed} of ${totalListings} directories accurate". On the right, a stacked text list of common directories (Google Business Profile, Yelp, Bing, Apple Maps, Facebook, Yellow Pages) each marked with a checkmark or X based on listed or missing status. Use native template elements only, do not generate a raster image.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -616,7 +616,7 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  An AI-assisted content calendar across Facebook, Instagram, TikTok, and LinkedIn. Posts drafted, scheduled, and tracked from one dashboard.`,
           `  Outcome line: "Stay visible and relevant without constant manual effort."`,
-          `IMAGERY: A horizontal row of social platform icons (Facebook, Instagram, TikTok, LinkedIn, YouTube) with engagement indicators. Below them, a mini monthly calendar grid showing colored content blocks scheduled across the month, illustrating an AI-driven posting cadence. Render the bullet list above as visible text cards on the slide, do not leave the body area empty.`,
+          `LAYOUT: Render the social platforms (Facebook, Instagram, TikTok, LinkedIn, YouTube) as a horizontal row of text labels or template-native icons. Render the bullet list above as visible text cards. Use native template elements only, do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -657,7 +657,7 @@ function buildPrompt(
           `Section 2, The Answer:`,
           `  A reputation system: automated review requests after every transaction, fast review responses, and 5-star reviews flowing into Google Business Profile on a steady cadence.`,
           `  Outcome line: "Turn trust into more calls, bookings, and sales."`,
-          `IMAGERY: A prominent row of five gold stars across the top. Underneath, a "Review Funnel" diagram showing the steps: Transaction, Automated SMS/email request, Customer review, Owner response. Include a sample 5-star Google review card mockup with a generic happy-customer avatar. Render these bullets as visible text cards on the slide body, do not leave the body area empty.`,
+          `LAYOUT: Render a five-step Review Funnel as a horizontal text-card sequence using the template's native step or timeline element: Transaction, Automated SMS or email request, Customer review, Owner response, Repeat. Render the bullets above as visible text cards. Use native template elements only, do not generate a raster image. Do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -677,7 +677,7 @@ function buildPrompt(
           (p) =>
             `  - ${p.label} (${p.score ?? "?"}/100${p.grade ? `, Grade ${p.grade}` : ""}): ${p.summary || "steady performance"}`,
         ),
-        `IMAGERY: A row of pillar cards, each topped with a green check badge and the pillar's grade letter.`,
+        `LAYOUT: Render a row of pillar cards using the template's native card element, each card topped with a check badge and the pillar's grade letter. No generated images.`,
       ].join("\n"),
     );
   }
@@ -697,8 +697,8 @@ function buildPrompt(
       `  5. Sync seamlessly with email, SMS, and scheduling tools`,
       `  6. Keep your business organized, responsive, and growing`,
       hasLockedTheme
-        ? `IMAGERY: A realistic-looking SaaS dashboard mockup occupying the right two-thirds of the slide. Show: a left sidebar with nav items (Dashboard, Leads, Pipeline, Inbox, Calendar, Reports), a top metrics row (Leads This Month, Active Deals, Tasks Due, Revenue), a kanban-style pipeline with three or four deal cards under columns labeled "New", "Working", "Closed", and a small activity feed on the right. Use accent color ${themeAccent} for highlights and primary color ${themePrimary} for headings. White card backgrounds, rounded corners. Make it look like a modern CRM product screenshot.`
-        : `IMAGERY: A realistic-looking SaaS dashboard mockup occupying the right two-thirds of the slide. Show: a left sidebar with nav items (Dashboard, Leads, Pipeline, Inbox, Calendar, Reports), a top metrics row (Leads This Month, Active Deals, Tasks Due, Revenue), a kanban-style pipeline with three or four deal cards under columns labeled "New", "Working", "Closed", and a small activity feed on the right. Use the deck's brand accent color for highlights, white card backgrounds, and rounded corners. Make it look like a modern CRM product screenshot.`,
+        ? `LAYOUT: Use the template's native two-column layout. Left: the six numbered capability cards. Right: a simple text-based dashboard panel built from native elements (a left nav list, a metrics row, three kanban columns labeled New, Working, Closed). Use accent color ${themeAccent} for highlights and primary color ${themePrimary} for headings. Do not generate a raster image, use native template elements only.`
+        : `LAYOUT: Use the template's native two-column layout. Left: the six numbered capability cards. Right: a simple text-based dashboard panel built from native elements (a left nav list, a metrics row, three kanban columns labeled New, Working, Closed). Use the deck's primary color for headings and accent color for highlights. Do not generate a raster image, use native template elements only.`,
       `Closing line: "Built around four pillars, connected through one unified client hub."`,
     ].join("\n"),
   );
@@ -712,7 +712,7 @@ function buildPrompt(
       `Phase 1 (Days 1 to 30), Foundation: claim and standardize directory listings, fix NAP, set up review collection.`,
       `Phase 2 (Days 31 to 60), Activation: launch the AI workforce, activate review automation, activate the social content calendar.`,
       `Phase 3 (Days 61 to 90), Acceleration: keyword content build out, authority and link building, reporting cadence.`,
-      `IMAGERY: A horizontal three-step timeline running left-to-right. Each phase is its own card with a numbered circle (1, 2, 3), a phase title, the date range, and a 2D icon (a foundation/anchor for Phase 1, a lightning bolt for Phase 2, a rocket for Phase 3). Connect the cards with arrows.`,
+      `LAYOUT: Use the template's native horizontal timeline or three-step element. Each phase is a card with a numbered circle (1, 2, 3), a phase title, and a date range. No generated images.`,
       `Closing line: "Each step can be completed without adding stress to your week. That is what SMB Solutions is here for."`,
     ].join("\n"),
   );
@@ -729,8 +729,8 @@ function buildPrompt(
       `Tagline (below the three cards): "Faith-rooted strategy. Seamless integration. Real human support."`,
       `Call to action: Prominent button or banner labeled "START" inviting the client to begin.`,
       hasLockedTheme
-        ? `IMAGERY: The client logo (if attached) above the three statement cards. A subtle pattern or gradient background using accent color ${themeAccent} behind the cards.`
-        : `IMAGERY: The client logo (if attached) above the three statement cards. A subtle pattern or gradient background in the deck accent color behind the cards.`,
+        ? `LAYOUT: Display the client logo (if attached) above the three statement cards using the template's native logo element. Use a solid or subtle gradient background using accent color ${themeAccent}. No generated images.`
+        : `LAYOUT: Display the client logo (if attached) above the three statement cards using the template's native logo element. Use a solid or subtle gradient background in the deck accent color. No generated images.`,
     ].join("\n"),
   );
 
@@ -755,13 +755,13 @@ function buildPrompt(
     "VISUAL STYLE",
     "==================================================================",
     hasLockedTheme
-      ? `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. LOCKED COLOR THEME: primary color ${themePrimary}, accent color ${themeAccent}. Use these exact colors on every slide for headings, accents, dividers, callouts, charts, and any branded highlights. Do not introduce other accent colors. Do not deviate from this palette. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}. Lean into the IMAGERY directives on each slide: use 2D vector icons, simple charts, and clean dashboard or diagram mockups built from the template's editable element library.`
-      : `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Do not add whiteboard, sketch, hand-drawn, marker, or photo aesthetics. Do not use illustrated cartoon doodles. Keep the design polished, modern, and on-brand for ${cn}. Lean into the IMAGERY directives on each slide: use 2D vector icons, simple charts, and clean dashboard or diagram mockups built from the template's editable element library.`,
+      ? `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. LOCKED COLOR THEME: primary color ${themePrimary}, accent color ${themeAccent}. Use these exact colors on every slide for headings, accents, dividers, callouts, charts, and any branded highlights. Do not introduce other accent colors. Do not deviate from this palette. Build every slide using the template's native HTML editable elements: stat cards, scoreboards, two-column panels, timelines, donut and progress elements, text-card sequences, and icon rows from the template's built-in library. DO NOT call any external image generation model (GPT Image, DALL-E, Midjourney, Stable Diffusion, nano-banana, or any other). Do not generate raster images. Native HTML only. Keep the design polished and on-brand for ${cn}.`
+      : `This deck is a clean, professional client-facing presentation. Use the Glamour template defaults for layout, typography, and structure. Build the color theme around the colors in the client logo that has been attached (if a logo was attached). Pull a primary brand color and one or two accent colors from the logo and apply them consistently across every slide. Build every slide using the template's native HTML editable elements: stat cards, scoreboards, two-column panels, timelines, donut and progress elements, text-card sequences, and icon rows from the template's built-in library. DO NOT call any external image generation model (GPT Image, DALL-E, Midjourney, Stable Diffusion, nano-banana, or any other). Do not generate raster images. Native HTML only. Keep the design polished and on-brand for ${cn}.`,
     "",
     "==================================================================",
     "DECK CONTENT",
     "==================================================================",
-    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. Each slide includes an IMAGERY line, follow it, these visuals are not optional, they carry the message.`,
+    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. Each slide includes a LAYOUT line, follow it using the template's native HTML editable elements. Do not generate raster images.`,
     "",
     "BRAND VOICE RULES:",
     "- Never say 'Vendasta'. The CRM is always 'SMB Smart CRM' or 'SMB Solutions CRM'.",
