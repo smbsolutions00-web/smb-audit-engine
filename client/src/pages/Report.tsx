@@ -2785,611 +2785,101 @@ type ManusDeckState = {
 };
 
 function ClientFacingDeckCard({ auditId }: { auditId: string }) {
-  const [logo, setLogo] = useState<File | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [state, setState] = useState<ManusDeckState>({ status: "idle" });
-  const inputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
 
   const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
-  const startUrl = `${API_BASE}/api/audits/${auditId}/send-to-manus`;
-  const statusUrl = `${API_BASE}/api/audits/${auditId}/manus-status`;
-  const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
-  const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
+  const promptUrl = `${API_BASE}/api/audits/${auditId}/manus-prompt`;
 
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  // Manual refresh handler (button), separate from the polling loop so we
-  // can show a spinning icon while it runs without disturbing the loop.
-  const refreshStatus = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      const res = await fetch(statusUrl, { credentials: "include" });
-      if (res.ok) {
-        const json = (await res.json()) as ManusDeckState;
-        setState(json);
-      }
-    } catch {
-      // Swallow — the polling loop will pick it up.
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [statusUrl]);
-
-  // Initial load + polling loop.
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    async function tick() {
-      try {
-        const res = await fetch(statusUrl, { credentials: "include" });
-        if (!res.ok) throw new Error(`status ${res.status}`);
-        const json = (await res.json()) as ManusDeckState;
-        if (cancelled) return;
-        setState(json);
-        // Continue polling only while running/queued.
-        if (json.status === "queued" || json.status === "running") {
-          timer = setTimeout(tick, 6000);
-        }
-      } catch {
-        if (cancelled) return;
-        // Retry in 15s on transient errors.
-        timer = setTimeout(tick, 15000);
-      }
-    }
-    tick();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [statusUrl]);
-
-  async function handleSend(opts: { resetTheme?: boolean; slideLimit?: number } = {}) {
-    setSubmitting(true);
+  // Pull the prompt text and copy it to the clipboard so Krystal can paste
+  // it into Manus, click Create Slides > Whiteboard, and get the genuine
+  // nano-banana whiteboard output. After Manus finishes, the user uploads
+  // the final PDF in the Final Client Deliverable card just below this one,
+  // which feeds the ElevenLabs script generator.
+  async function handleCopyPrompt() {
+    setCopying(true);
     setErrorMsg(null);
     try {
-      const fd = new FormData();
-      if (logo) fd.append("logo", logo);
-      if (opts.resetTheme) fd.append("resetTheme", "true");
-      if (opts.slideLimit) fd.append("slideLimit", String(opts.slideLimit));
-      const res = await fetch(startUrl, {
-        method: "POST",
-        credentials: "include",
-        body: fd,
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
-      toast({
-        title: opts.slideLimit
-          ? `Sent to Manus, ${opts.slideLimit}-slide preview`
-          : "Sent to Manus",
-        description: opts.slideLimit
-          ? "Generating a quick preview so you can check the whiteboard style before running the full deck."
-          : "Generating the client-facing deck. This usually takes a few minutes.",
-      });
-      setState({ status: "running", taskId: json.taskId, taskUrl: json.taskUrl });
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Could not start the Manus task.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  // Pull the exact prompt text and copy it to clipboard so the user can
-  // paste manually into Manus, click Create Slides > Whiteboard, and run
-  // the deck themselves without spending Manus API credits through us.
-  async function handleCopyPrompt(slideLimit?: number) {
-    try {
-      const qs = slideLimit ? `?slides=${slideLimit}` : "";
-      const res = await fetch(
-        `${API_BASE}/api/audits/${auditId}/manus-prompt${qs}`,
-        { credentials: "include" },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      await navigator.clipboard.writeText(text);
-      toast({
-        title: slideLimit
-          ? `Copied ${slideLimit}-slide prompt`
-          : "Copied full prompt",
-        description:
-          "Paste it into Manus, click Create Slides, then Whiteboard. The nano-banana whiteboard style will render exactly as you saw before.",
-      });
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Could not copy the prompt.");
-    }
-  }
-
-  // Drop the persisted logo so the next regenerate starts clean.
-  async function handleRemoveLogo() {
-    try {
-      await fetch(`${API_BASE}/api/audits/${auditId}/manus-logo`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      setLogo(null);
-      if (inputRef.current) inputRef.current.value = "";
-      await refreshStatus();
-      toast({
-        title: "Logo removed",
-        description: "The next regenerate will use no logo until you upload a new one.",
-      });
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Could not remove the stored logo.");
-    }
-  }
-
-  const isRunning = state.status === "queued" || state.status === "running";
-  const isComplete = state.status === "complete";
-  const isFailed = state.status === "failed";
-
-  function elapsedLabel(): string {
-    if (!state.startedAt) return "under a minute";
-    const ms = Date.now() - state.startedAt;
-    const m = Math.floor(ms / 60000);
-    const s = Math.floor((ms % 60000) / 1000);
-    if (m === 0) return `${s}s`;
-    return `${m}m ${s.toString().padStart(2, "0")}s`;
-  }
-
-  function formatStamp(ms?: number): string {
-    if (!ms) return "";
-    const d = new Date(ms);
-    const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-    return `${date} at ${time}`;
-  }
-
-  // Inline ElevenLabs script generation + viewer.
-  // Pulls (or regenerates) the script from the deck PDF, opens a dialog with
-  // edit + download, and surfaces a persistent "View Script" button after
-  // generation so the user never has to scroll hunting for it.
-  const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
-  const [scriptBusy, setScriptBusy] = useState(false);
-  const [scriptOpen, setScriptOpen] = useState(false);
-  const [scriptText, setScriptText] = useState("");
-  const [scriptHasGenerated, setScriptHasGenerated] = useState(false);
-  const [scriptGeneratedAt, setScriptGeneratedAt] = useState<number | undefined>();
-  const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj2-script.txt");
-  const [scriptDirty, setScriptDirty] = useState(false);
-  const [scriptSaving, setScriptSaving] = useState(false);
-  const [scriptError, setScriptError] = useState<string | null>(null);
-
-  // On mount (when deck is complete), probe the script endpoint once so a
-  // previously-generated script is recognized without re-running generation.
-  useEffect(() => {
-    if (!isComplete) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${scriptUrl}?format=json&peek=1`, {
-          credentials: "include",
-        });
-        if (!res.ok) return; // 404 etc. just means not yet generated
-        const json = await res.json();
-        if (cancelled) return;
-        // hasGenerated=true means a script exists in the audit history but the
-        // body isn't cached server-side (only edited scripts are persisted).
-        // The card shows "Last generated at X" + a View button that will
-        // regenerate on demand.
-        if (json?.hasGenerated || json?.script) {
-          setScriptText(json.script || "");
-          setScriptHasGenerated(true);
-          setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
-          setScriptGeneratedAt(json.generatedAt);
-        }
-      } catch {
-        /* ignore probe errors */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isComplete, scriptUrl]);
-
-  async function handleGenerateScript(opts: { regenerate?: boolean } = {}) {
-    setScriptBusy(true);
-    setScriptError(null);
-    try {
-      const url = opts.regenerate
-        ? `${scriptUrl}?format=json&regenerate=1`
-        : `${scriptUrl}?format=json`;
-      const res = await fetch(url, { credentials: "include" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || `HTTP ${res.status}`);
-      setScriptText(json.script || "");
-      setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
-      setScriptGeneratedAt(json.generatedAt || Date.now());
-      setScriptHasGenerated(true);
-      setScriptDirty(false);
-      setScriptOpen(true);
-      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
-    } catch (err: any) {
-      const msg = err?.message || "Unknown error.";
-      setScriptError(msg);
-      toast({
-        title: "Could not generate the script",
-        description: msg,
-        variant: "destructive",
-      });
-    } finally {
-      setScriptBusy(false);
-    }
-  }
-
-  async function handleSaveScript() {
-    setScriptSaving(true);
-    setScriptError(null);
-    try {
-      const res = await fetch(scriptUrl, {
-        method: "PUT",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script: scriptText }),
-      });
+      const res = await fetch(promptUrl, { credentials: "include" });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.message || `HTTP ${res.status}`);
       }
-      setScriptDirty(false);
-      toast({ title: "Script saved", description: "Your edits are stored on this audit." });
-      queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+      const text = await res.text();
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: "Prompt copied",
+        description:
+          "Paste it into Manus, click Create Slides, then Whiteboard. Once the deck is finished, upload the PDF in the Final Client Deliverable card below.",
+      });
     } catch (err: any) {
-      setScriptError(err?.message || "Save failed.");
+      setErrorMsg(err?.message || "Could not copy the prompt.");
     } finally {
-      setScriptSaving(false);
+      setCopying(false);
     }
   }
 
-  function handleDownloadScript() {
-    const blob = new Blob([scriptText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = scriptFilename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  async function handleDownloadPrompt() {
+    try {
+      const res = await fetch(promptUrl, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `manus-whiteboard-prompt-${auditId}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Could not download the prompt.");
+    }
   }
 
   return (
     <Card
       id="client-facing-deck"
-      className="no-print border-card-border p-6 md:p-8 transition-shadow duration-500"
+      className="no-print border-card-border p-6 md:p-8"
       data-testid="section-client-facing-deck"
     >
       <SectionLabel icon={Presentation}>Client-Facing Deck</SectionLabel>
       <h3 className="mt-2 text-lg font-bold tracking-tight">
-        Send to Manus, Client-Facing Deck
+        Manus Whiteboard Deck Prompt
       </h3>
       <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-        Manus produces a polished PDF deck the business owner can actually
-        follow: ranking keywords, opportunity keywords, listings gap, and the
-        reputation story. You can attach the client logo so it appears on
-        every slide.
+        Copy the prompt below and paste it into Manus. Click Create Slides,
+        then Whiteboard. Nano-banana will render the hand-drawn whiteboard
+        deck exactly as you saw before. Once the deck is finished in Manus,
+        come back and upload the PDF in the Final Client Deliverable card
+        below to generate the ElevenLabs DJ #2 narration script.
       </p>
 
-      <div className="mt-5 grid gap-5">
-        {/* Logo + theme controls (always visible except while running) */}
-        {!isRunning && (
-          <div className="grid gap-3">
-            <Label>Client logo and theme</Label>
-
-            {/* Persisted logo card: shown when we already have a stored logo
-                and the user has not picked a new one in this session. */}
-            {!logo && state.manusLogo?.exists && (
-              <div
-                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
-                data-testid="manus-logo-stored"
-              >
-                <img
-                  src={`${state.manusLogo.url}?v=${state.completedAt || state.startedAt || ""}`}
-                  alt="Stored client logo"
-                  className="h-12 w-12 shrink-0 rounded border border-card-border bg-white object-contain"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">
-                    Reusing logo: {state.manusLogo.filename || "saved file"}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    The next regenerate will use this logo automatically. No re-upload needed.
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => inputRef.current?.click()}
-                  disabled={submitting}
-                  data-testid="manus-logo-replace"
-                >
-                  Replace
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleRemoveLogo}
-                  disabled={submitting}
-                  data-testid="manus-logo-clear"
-                  title="Remove the stored logo"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-
-            {/* New file picked in this session. */}
-            {logo && (
-              <div
-                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 p-3"
-                data-testid="manus-logo-file"
-              >
-                <ImageIcon className="h-5 w-5 shrink-0 text-accent" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{logo.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {(logo.size / 1024).toFixed(0)} KB, will replace the stored logo on next regenerate.
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setLogo(null)}
-                  disabled={submitting}
-                  data-testid="manus-logo-remove"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-
-            {/* Upload dropzone shown when there is no logo at all. */}
-            {!logo && !state.manusLogo?.exists && (
-              <button
-                type="button"
-                onClick={() => inputRef.current?.click()}
-                className="hover-elevate flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-secondary/30 px-4 py-6 text-sm"
-                data-testid="manus-logo-dropzone"
-              >
-                <Upload className="h-5 w-5 text-muted-foreground" />
-                <span className="text-sm font-medium">Click to upload logo (PNG, JPG, SVG)</span>
-                <span className="text-xs text-muted-foreground">
-                  Skip if you do not have a logo yet, Manus will use brand colors
-                </span>
-              </button>
-            )}
-
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => setLogo(e.target.files?.[0] ?? null)}
-            />
-
-            {/* Locked theme color swatches. */}
-            {(state.theme?.primary || state.theme?.accent) && (
-              <div
-                className="flex items-center gap-3 rounded-lg border border-card-border bg-secondary/40 px-3 py-2"
-                data-testid="manus-theme-swatches"
-              >
-                <div className="text-xs font-medium text-muted-foreground">Locked theme:</div>
-                {state.theme?.primary && (
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="h-4 w-4 rounded border border-card-border"
-                      style={{ background: state.theme.primary }}
-                    />
-                    <span className="text-xs font-mono">{state.theme.primary}</span>
-                  </div>
-                )}
-                {state.theme?.accent && (
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="h-4 w-4 rounded border border-card-border"
-                      style={{ background: state.theme.accent }}
-                    />
-                    <span className="text-xs font-mono">{state.theme.accent}</span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleSend({ resetTheme: true })}
-                  disabled={submitting}
-                  className="ml-auto text-xs text-accent underline-offset-2 hover:underline"
-                  data-testid="manus-theme-reset"
-                  title="Re-extract colors from the logo on the next regenerate"
-                >
-                  Reset theme
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Running spinner */}
-        {isRunning && (
-          <div
-            className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent/10 p-4"
-            data-testid="manus-deck-running"
-          >
-            <div className="flex items-center gap-3">
-              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-accent" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Manus is generating slides</div>
-                <div className="text-xs text-muted-foreground">
-                  Started {formatStamp(state.startedAt)}. Elapsed: {elapsedLabel()}. Decks usually finish in three to eight minutes.
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {state.taskUrl && (
-                <a
-                  href={state.taskUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-accent underline-offset-2 hover:underline"
-                >
-                  Open the live Manus task
-                </a>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={refreshStatus}
-                disabled={isRefreshing}
-                data-testid="button-manus-refresh"
-              >
-                <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-                Check for updates
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Complete: download buttons */}
-        {isComplete && (
-          <div
-            className="flex flex-col gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4"
-            data-testid="manus-deck-complete"
-          >
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">
-                    Deck ready ({state.slideCount ?? "?"} slides)
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {state.completedAt
-                      ? `Generated ${formatStamp(state.completedAt)}`
-                      : "Download the PDF or the labeled slide images (slide-01.png, slide-02.png, ...)."}
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {state.hasPdf && (
-                  <Button
-                    asChild
-                    className="bg-accent text-accent-foreground hover:bg-accent/90"
-                    data-testid="button-download-deck-pdf"
-                  >
-                    <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
-                      <FileDown className="mr-1.5 h-4 w-4" />
-                      Download PDF
-                    </a>
-                  </Button>
-                )}
-                {state.hasZip && (
-                  <Button asChild variant="outline" data-testid="button-download-deck-zip">
-                    <a href={zipUrl} target="_blank" rel="noopener noreferrer">
-                      <FileDown className="mr-1.5 h-4 w-4" />
-                      Download Slide Images (ZIP)
-                    </a>
-                  </Button>
-                )}
-              </div>
-            </div>
-            {state.logoAdjusted && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
-                Your logo was placed on a white card before sending so it stays crisp on any slide background.
-              </div>
-            )}
-            {/* One-click ElevenLabs script generation from the deck PDF.
-                Skips the manual upload step in the Final Deliverable section. */}
-            <div className="mt-1 flex flex-col gap-2 border-t border-emerald-500/20 pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">
-                  {scriptHasGenerated ? "ElevenLabs DJ #2 script" : "Next: ElevenLabs DJ #2 script"}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {scriptHasGenerated ? (
-                    <>Last generated {formatStamp(scriptGeneratedAt) || "just now"}. View, edit, or download.</>
-                  ) : (
-                    <>Generate the narration script straight from this deck PDF. You can review and edit it right here.</>
-                  )}
-                </div>
-                {scriptError && (
-                  <div className="mt-1 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-                    {scriptError}
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {scriptHasGenerated && scriptText && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleDownloadScript}
-                    data-testid="button-download-elevenlabs-from-deck"
-                  >
-                    <FileDown className="mr-1.5 h-4 w-4" />
-                    Download .txt
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={async () => {
-                    if (scriptText) {
-                      // Already loaded in memory, just open dialog.
-                      setScriptOpen(true);
-                    } else {
-                      // Either fresh generate (no prior script) or re-load
-                      // body for a previously generated script.
-                      await handleGenerateScript();
-                    }
-                  }}
-                  disabled={scriptBusy || !state.hasPdf}
-                  data-testid="button-generate-elevenlabs-from-deck"
-                >
-                  {scriptBusy ? (
-                    <>
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                      Generating…
-                    </>
-                  ) : scriptHasGenerated && scriptText ? (
-                    <>
-                      <Eye className="mr-1.5 h-4 w-4" />
-                      View &amp; Edit Script
-                    </>
-                  ) : scriptHasGenerated ? (
-                    <>
-                      <Eye className="mr-1.5 h-4 w-4" />
-                      View Script
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="mr-1.5 h-4 w-4" />
-                      Generate ElevenLabs Script
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-            {state.taskUrl && (
-              <a
-                href={state.taskUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-              >
-                Open the Manus task to review or revise
-              </a>
-            )}
-          </div>
-        )}
-
-        {/* Failed */}
-        {isFailed && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            Manus task failed: {state.error || "unknown error"}
-          </div>
-        )}
+      <div className="mt-5 grid gap-4">
+        <ol className="grid gap-2 rounded-lg border border-card-border bg-secondary/30 p-4 text-sm">
+          <li>
+            <span className="font-medium">1.</span> Click{" "}
+            <span className="font-medium">Copy Prompt</span> to put the deck
+            instructions on your clipboard.
+          </li>
+          <li>
+            <span className="font-medium">2.</span> Open Manus, paste it into
+            a new conversation, then click{" "}
+            <span className="font-medium">Create Slides</span> and choose{" "}
+            <span className="font-medium">Whiteboard</span>.
+          </li>
+          <li>
+            <span className="font-medium">3.</span> Wait for Manus to finish
+            (a few minutes). Download the PDF from Manus.
+          </li>
+          <li>
+            <span className="font-medium">4.</span> Upload that PDF in the
+            Final Client Deliverable card below. The ElevenLabs DJ #2 script
+            will be ready to generate from it.
+          </li>
+        </ol>
 
         {errorMsg && (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -3397,171 +2887,35 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           </div>
         )}
 
-        {/* Send / Resend buttons + whiteboard preview + copy-prompt fallback */}
-        {!isRunning && (
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleCopyPrompt()}
-              disabled={submitting}
-              data-testid="button-copy-manus-prompt"
-              title="Copy the exact prompt to paste into Manus manually, then click Create Slides > Whiteboard."
-            >
-              Copy Prompt
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleSend({ slideLimit: 1 })}
-              disabled={submitting}
-              data-testid="button-send-to-manus-test"
-              title="Sends only slide 1 so you can confirm the whiteboard style before running the full deck."
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  Sending...
-                </>
-              ) : (
-                <>Test 1 Slide</>
-              )}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={submitting}
-              className="bg-accent text-accent-foreground hover:bg-accent/90"
-              data-testid="button-send-to-manus"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  Sending...
-                </>
-              ) : isComplete || isFailed ? (
-                <>
-                  <RefreshCw className="mr-1.5 h-4 w-4" />
-                  Regenerate Deck
-                </>
-              ) : (
-                <>
-                  <Send className="mr-1.5 h-4 w-4" />
-                  Send to Manus
-                </>
-              )}
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleDownloadPrompt}
+            disabled={copying}
+            data-testid="button-download-manus-prompt"
+          >
+            <FileDown className="mr-1.5 h-4 w-4" />
+            Download .txt
+          </Button>
+          <Button
+            type="button"
+            onClick={handleCopyPrompt}
+            disabled={copying}
+            className="bg-accent text-accent-foreground hover:bg-accent/90"
+            data-testid="button-copy-manus-prompt"
+          >
+            {copying ? (
+              <>
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                Copying…
+              </>
+            ) : (
+              <>Copy Prompt</>
+            )}
+          </Button>
+        </div>
       </div>
-
-      {/* -------- Inline ElevenLabs script viewer + editor -------- */}
-      <Dialog
-        open={scriptOpen}
-        onOpenChange={(o) => {
-          if (!o && scriptDirty) {
-            const ok = window.confirm("You have unsaved edits. Close anyway?");
-            if (!ok) return;
-          }
-          setScriptOpen(o);
-        }}
-      >
-        <DialogContent
-          className="max-w-4xl"
-          data-testid="dialog-deck-elevenlabs-script"
-        >
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkle className="h-5 w-5 text-accent" />
-              ElevenLabs DJ #2 Script
-              {scriptDirty && (
-                <Badge variant="outline" className="ml-1 border-amber-500 text-xs text-amber-600">
-                  Unsaved changes
-                </Badge>
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              Preview, edit, save, and download the narration script. Edits are
-              stored on this audit and served next time you open it. Regenerate
-              to rebuild from the Manus deck PDF.
-              {scriptGeneratedAt && (
-                <> Generated {formatStamp(scriptGeneratedAt)}.</>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-
-          {scriptBusy && !scriptText ? (
-            <div className="flex h-96 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Generating script… this takes about 20 seconds.
-            </div>
-          ) : (
-            <Textarea
-              value={scriptText}
-              onChange={(e) => {
-                setScriptText(e.target.value);
-                setScriptDirty(true);
-              }}
-              className="h-96 max-h-[60vh] min-h-[24rem] font-mono text-xs"
-              spellCheck={false}
-              data-testid="textarea-deck-elevenlabs-script"
-            />
-          )}
-
-          {scriptError && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-              {scriptError}
-            </div>
-          )}
-
-          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => handleGenerateScript({ regenerate: true })}
-                disabled={scriptBusy || scriptSaving}
-                data-testid="button-deck-regenerate-script"
-              >
-                <RotateCw className="mr-1.5 h-4 w-4" />
-                Regenerate
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleDownloadScript}
-                disabled={!scriptText || scriptBusy}
-                data-testid="button-deck-download-script"
-              >
-                <FileDown className="mr-1.5 h-4 w-4" />
-                Download .txt
-              </Button>
-              <Button
-                type="button"
-                onClick={handleSaveScript}
-                disabled={!scriptDirty || scriptSaving || scriptBusy}
-                className="bg-accent text-accent-foreground hover:bg-accent/90"
-                data-testid="button-deck-save-script"
-              >
-                {scriptSaving ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    Saving…
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-1.5 h-4 w-4" />
-                    Save
-                  </>
-                )}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Card>
   );
 }
