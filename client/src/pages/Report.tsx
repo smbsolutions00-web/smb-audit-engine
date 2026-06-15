@@ -2221,6 +2221,10 @@ function FinalDeliverableSection({
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj2-script.txt");
+  // "view" = read-only preview, "edit" = textarea editable. Two separate
+  // dialog modes so Krystal can quickly read or copy a saved script without
+  // accidentally typing into it, and still open Edit when she wants to tweak.
+  const [scriptMode, setScriptMode] = useState<"view" | "edit">("view");
   const { toast } = useToast();
 
   const hasUploaded = !!uploadedAt;
@@ -2263,7 +2267,8 @@ function FinalDeliverableSection({
     }
   }
 
-  async function openScriptEditor() {
+  async function openScriptDialog(mode: "view" | "edit") {
+    setScriptMode(mode);
     setScriptOpen(true);
     if (!scriptText) {
       await loadScript();
@@ -2381,22 +2386,43 @@ function FinalDeliverableSection({
                 </Button>
                 <Button
                   type="button"
-                  onClick={openScriptEditor}
+                  variant="outline"
+                  onClick={() => setConfirmRegenerate(true)}
                   disabled={scriptLoading}
-                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  data-testid="button-regenerate-script-outer"
+                  title="Rebuild the narration script from the Manus PDF. Saved edits will be lost."
+                >
+                  <RotateCw className="mr-1.5 h-4 w-4" />
+                  Regenerate
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => openScriptDialog("view")}
+                  disabled={scriptLoading}
                   data-testid="button-view-elevenlabs-script"
                 >
                   {scriptLoading && !scriptOpen ? (
                     <>
                       <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                      Generating...
+                      Loading...
                     </>
                   ) : (
                     <>
                       <Eye className="mr-1.5 h-4 w-4" />
-                      View & Edit Script
+                      View
                     </>
                   )}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => openScriptDialog("edit")}
+                  disabled={scriptLoading}
+                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  data-testid="button-edit-elevenlabs-script"
+                >
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Edit
                 </Button>
               </div>
             </div>
@@ -2510,9 +2536,15 @@ function FinalDeliverableSection({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkle className="h-5 w-5 text-accent" />
-              ElevenLabs DJ #2 Script
+              {scriptMode === "view" ? "View ElevenLabs DJ #2 Script" : "Edit ElevenLabs DJ #2 Script"}
+              <Badge
+                variant={scriptMode === "view" ? "secondary" : "default"}
+                className="ml-2 text-xs uppercase tracking-wide"
+              >
+                {scriptMode === "view" ? "Read only" : "Editing"}
+              </Badge>
               {scriptIsEdited && (
-                <Badge variant="secondary" className="ml-2 text-xs">
+                <Badge variant="secondary" className="ml-1 text-xs">
                   Edited
                 </Badge>
               )}
@@ -2523,9 +2555,9 @@ function FinalDeliverableSection({
               )}
             </DialogTitle>
             <DialogDescription>
-              Preview, edit, and download the narration script. Edits are saved on
-              this audit and will be served the next time you open or download.
-              Regenerate to rebuild from the Manus PDF.
+              {scriptMode === "view"
+                ? "Preview the narration script and copy blocks into ElevenLabs. Switch to Edit if you need to tweak the copy."
+                : "Edit the narration script, save your changes, and download. Regenerate to rebuild from the Manus PDF."}
             </DialogDescription>
           </DialogHeader>
 
@@ -2539,15 +2571,19 @@ function FinalDeliverableSection({
               <ScriptBlocksPreview script={scriptText} />
               <div className="grid gap-1">
                 <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Full script (editable)
+                  {scriptMode === "view" ? "Full script (read only)" : "Full script (editable)"}
                 </Label>
                 <Textarea
                   value={scriptText}
                   onChange={(e) => {
+                    if (scriptMode === "view") return;
                     setScriptText(e.target.value);
                     setScriptDirty(true);
                   }}
-                  className="min-h-[16rem] font-mono text-xs"
+                  readOnly={scriptMode === "view"}
+                  className={`min-h-[16rem] font-mono text-xs ${
+                    scriptMode === "view" ? "cursor-default bg-muted/40" : ""
+                  }`}
                   spellCheck={false}
                   data-testid="textarea-elevenlabs-script"
                 />
@@ -2586,25 +2622,37 @@ function FinalDeliverableSection({
                 <FileDown className="mr-1.5 h-4 w-4" />
                 Download .txt
               </Button>
-              <Button
-                type="button"
-                onClick={saveScript}
-                disabled={!scriptDirty || scriptSaving || scriptLoading}
-                className="bg-accent text-accent-foreground hover:bg-accent/90"
-                data-testid="button-save-script"
-              >
-                {scriptSaving ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    Saving…
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-1.5 h-4 w-4" />
-                    Save
-                  </>
-                )}
-              </Button>
+              {scriptMode === "edit" ? (
+                <Button
+                  type="button"
+                  onClick={saveScript}
+                  disabled={!scriptDirty || scriptSaving || scriptLoading}
+                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  data-testid="button-save-script"
+                >
+                  {scriptSaving ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="mr-1.5 h-4 w-4" />
+                      Save
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => setScriptMode("edit")}
+                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  data-testid="button-switch-to-edit"
+                >
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Switch to Edit
+                </Button>
+              )}
             </div>
           </DialogFooter>
         </DialogContent>
