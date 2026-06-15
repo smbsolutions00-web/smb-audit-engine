@@ -767,6 +767,7 @@ export function buildPrompt(
     `- ${slideCount} slide${slideCount === 1 ? "" : "s"} in this template's default style.`,
     `- A PDF copy of the deck.`,
     `- A PPTX copy of the deck.`,
+    `- A ZIP archive containing every slide as a separate high-resolution PNG image, named slide-01.png, slide-02.png, etc. This is required so the images can be reused individually outside the deck.`,
   ]
     .filter(Boolean)
     .join("\n");

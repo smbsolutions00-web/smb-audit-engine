@@ -3067,12 +3067,18 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           </li>
           <li>
             <span className="font-medium">3.</span> Wait for Manus to finish
-            (a few minutes). Download the PDF from Manus.
+            (a few minutes). Download all three deliverables: the{" "}
+            <span className="font-medium">PDF</span>, the{" "}
+            <span className="font-medium">PPTX</span>, and the{" "}
+            <span className="font-medium">ZIP of individual slide images</span>.
+            If the ZIP is missing, ask Manus to package every slide as a
+            separate PNG (slide-01.png, slide-02.png, etc.) and re-export.
           </li>
           <li>
-            <span className="font-medium">4.</span> Upload that PDF in the
+            <span className="font-medium">4.</span> Upload the PDF in the
             Final Client Deliverable card below. The ElevenLabs DJ #2 script
-            will be ready to generate from it.
+            will be ready to generate from it. Keep the ZIP for reusing
+            individual slide images later.
           </li>
         </ol>
 
