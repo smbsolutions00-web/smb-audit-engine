@@ -2793,9 +2793,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
   const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
   const startUrl = `${API_BASE}/api/audits/${auditId}/send-to-manus`;
   const statusUrl = `${API_BASE}/api/audits/${auditId}/manus-status`;
-  const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
   const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
-  const pptxUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pptx`;
 
   // Initial load + polling loop.
   useEffect(() => {
@@ -2991,12 +2989,12 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
     >
       <SectionLabel icon={Presentation}>Client-Facing Deck</SectionLabel>
       <h3 className="mt-2 text-lg font-bold tracking-tight">
-        Send to Manus, Simplified 10-Slide Overview
+        Send to Manus, Client-Facing Deck
       </h3>
       <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-        Manus produces an image-mode deck the business owner can actually
-        follow: 3 ranking keywords, 7 opportunity keywords, listings gap, and
-        the reputation story. You can attach the client logo so it appears on
+        Manus produces a polished PDF deck the business owner can actually
+        follow: ranking keywords, opportunity keywords, listings gap, and the
+        reputation story. You can attach the client logo so it appears on
         every slide.
       </p>
 
@@ -3096,19 +3094,11 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                   <div className="text-xs text-muted-foreground">
                     {state.completedAt
                       ? `Generated ${formatStamp(state.completedAt)}`
-                      : "Download the slide images or the assembled PDF."}
+                      : "Download the assembled PDF."}
                   </div>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                {state.hasZip && (
-                  <Button asChild variant="outline" data-testid="button-download-deck-zip">
-                    <a href={zipUrl} target="_blank" rel="noopener noreferrer">
-                      <FileDown className="mr-1.5 h-4 w-4" />
-                      Download Slide Images
-                    </a>
-                  </Button>
-                )}
                 {state.hasPdf && (
                   <Button
                     asChild
@@ -3121,23 +3111,11 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                     </a>
                   </Button>
                 )}
-                {state.hasPptx && (
-                  <Button
-                    asChild
-                    variant="outline"
-                    data-testid="button-download-deck-pptx"
-                  >
-                    <a href={pptxUrl} target="_blank" rel="noopener noreferrer">
-                      <FileDown className="mr-1.5 h-4 w-4" />
-                      Download PowerPoint
-                    </a>
-                  </Button>
-                )}
               </div>
             </div>
             {state.logoAdjusted && (
               <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
-                Your logo had dark text on a dark or transparent background, so we placed it on a white card before sending. It will look crisp against the deck theme.
+                Your logo was placed on a white card before sending so it stays crisp on any slide background.
               </div>
             )}
             {/* One-click ElevenLabs script generation from the deck PDF.

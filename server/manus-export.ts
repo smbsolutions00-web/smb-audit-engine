@@ -155,16 +155,15 @@ function deckDir(auditId: string) {
 }
 
 /**
- * Smart logo preparation:
- *   - Decode the uploaded logo.
- *   - Sample the border pixels (outer 5% of the image, all 4 edges).
- *   - If the border is dark (mean luminance < 0.4) AND the logo has
- *     transparency or mostly-dark content, the logo will be invisible
- *     against Glamour's dark sidebar. Pad it onto a white background.
- *   - Return the adjusted data URL plus a flag for telemetry.
+ * Logo preparation: ALWAYS composite the uploaded logo onto a white
+ * rounded-corner card before sending to Manus. The Glamour template uses
+ * a dark cover, so any logo with dark text (Fiorina-style) becomes invisible
+ * without a light backing. White-carding every logo is cheaper than trying
+ * to detect edge luminance against transparent backgrounds and prevents
+ * credit-wasting invisible-cover runs.
  *
- * Robust to PNG, JPEG, WebP, SVG. SVG is rasterized to PNG @ 1024px wide
- * because Manus needs a raster image.
+ * SVG inputs are rasterized to PNG first. The output is a 1200x800 PNG
+ * with the logo centered, fit inside an 84% inner box.
  */
 async function prepareLogo(
   logoDataUrl: string,
@@ -175,85 +174,22 @@ async function prepareLogo(
   const inputBuf = Buffer.from(b64, "base64");
 
   try {
-    // Rasterize SVGs (sharp can handle SVG input but downstream we want PNG).
     const isSvg = /svg/i.test(mimeType);
-    const img = isSvg
+    const inputImg = isSvg
       ? sharp(inputBuf, { density: 300 }).resize({ width: 1024, withoutEnlargement: false }).png()
       : sharp(inputBuf);
 
-    const meta = await img.metadata();
+    const meta = await inputImg.metadata();
     if (!meta.width || !meta.height) {
       return { dataUrl: logoDataUrl, adjusted: false };
     }
 
-    // Get raw RGBA pixel data with alpha. ensureAlpha so we always have 4 channels.
-    const { data, info } = await img
-      .clone()
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const { width: W, height: H, channels } = info;
-
-    // Sample edge pixels (top, bottom, left, right strips, 5% thick).
-    const strip = Math.max(2, Math.floor(Math.min(W, H) * 0.05));
-    let lumSum = 0;
-    let lumCount = 0;
-    const px = (x: number, y: number) => {
-      const idx = (y * W + x) * channels;
-      const a = channels >= 4 ? data[idx + 3] : 255;
-      if (a < 16) return; // ignore transparent pixels
-      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-      // Rec. 709 luminance
-      const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-      lumSum += lum;
-      lumCount++;
-    };
-    for (let y = 0; y < strip; y++) for (let x = 0; x < W; x++) px(x, y);
-    for (let y = H - strip; y < H; y++) for (let x = 0; x < W; x++) px(x, y);
-    for (let x = 0; x < strip; x++) for (let y = 0; y < H; y++) px(x, y);
-    for (let x = W - strip; x < W; x++) for (let y = 0; y < H; y++) px(x, y);
-
-    // Also compute the average luminance of the WHOLE logo (ignoring
-    // transparency) so we can distinguish "dark canvas" vs "dark text on
-    // light canvas". A logo with light edges but dark text is fine.
-    let allLumSum = 0;
-    let allLumCount = 0;
-    let transparentPixels = 0;
-    let totalPixels = 0;
-    for (let i = 0; i < data.length; i += channels) {
-      totalPixels++;
-      const a = channels >= 4 ? data[i + 3] : 255;
-      if (a < 16) { transparentPixels++; continue; }
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-      allLumSum += lum;
-      allLumCount++;
-    }
-    const edgeLum = lumCount > 0 ? lumSum / lumCount : 1;
-    const overallLum = allLumCount > 0 ? allLumSum / allLumCount : 1;
-    const transparentRatio = totalPixels > 0 ? transparentPixels / totalPixels : 0;
-
-    // Decide whether to pad. Logic:
-    //   - If the logo has lots of transparency (>20%) AND its visible pixels
-    //     are dark (overall lum < 0.45), it will disappear against Glamour's
-    //     dark sidebar. Pad onto white.
-    //   - If the logo has an opaque dark canvas (edge lum < 0.25, low
-    //     transparency), it's a dark-themed logo. Add a white card around it
-    //     so it pops on any background, light or dark.
-    const willDisappearOnDark =
-      (transparentRatio > 0.2 && overallLum < 0.45) ||
-      (transparentRatio <= 0.2 && edgeLum < 0.25);
-
-    if (!willDisappearOnDark && !isSvg) {
-      return { dataUrl: logoDataUrl, adjusted: false };
-    }
-
-    // Composite the logo (centered, with 8% padding) onto a 1200x800 white card.
+    // Composite the logo (centered, with ~8% padding) onto a 1200x800 white card.
     const targetW = 1200;
     const targetH = 800;
     const innerW = Math.floor(targetW * 0.84);
     const innerH = Math.floor(targetH * 0.84);
-    const resized = await img
+    const resized = await inputImg
       .clone()
       .resize({ width: innerW, height: innerH, fit: "inside", withoutEnlargement: false })
       .png()
@@ -271,9 +207,8 @@ async function prepareLogo(
       .png({ compressionLevel: 9 })
       .toBuffer();
 
-    const outB64 = outPng.toString("base64");
     return {
-      dataUrl: `data:image/png;base64,${outB64}`,
+      dataUrl: `data:image/png;base64,${outPng.toString("base64")}`,
       adjusted: true,
     };
   } catch (err) {
@@ -495,7 +430,18 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
           `  Be the answer Google AND AI engines pick first. Local SEO, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization), tuned to the highest-volume opportunity keywords above.`,
           `  Publish targeted content, optimize on-page signals, and earn citations.`,
           `  Outcome line: "Capture the searches your competitors are winning today."`,
-          `IMAGERY: A stylized Google SERP mockup at the top, showing the ranking keywords as green-highlighted result rows and the opportunity keywords as gray competitor result rows. Below the SERP, a small bar chart of monthly search volume per opportunity keyword. Use a magnifying-glass icon as a section badge.`,
+          `IMAGERY: Build a two-column comparison panel, no SERP mockup, no bar chart with invented labels.`,
+          `  LEFT COLUMN header "WHERE YOU RANK". Render one card per ranking keyword below using these EXACT strings (do not paraphrase, do not invent additional rows):`,
+          ...ranking.map(
+            (k) =>
+              `    - "${k.keyword}" | rank #${k.position ?? "?"} | ${(k.volume ?? 0).toLocaleString()}/mo`,
+          ),
+          `  RIGHT COLUMN header "WHAT YOU MISS". Render one card per opportunity keyword below using these EXACT strings as the visible labels (do not paraphrase, do not invent additional rows, do not shorten):`,
+          ...opportunity.map(
+            (k) =>
+              `    - "${k.keyword}" | ${(k.volume ?? 0).toLocaleString()}/mo`,
+          ),
+          `  Style: left column cards use a green check badge with the rank number; right column cards use an amber warning badge with the volume number. Add a magnifying-glass icon as a section badge in the slide header. Do NOT add any other keyword labels beyond the exact strings listed above.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -582,22 +528,6 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     );
   }
 
-  // ---------- SLIDE: Four Pillars + CRM Hub (moved here, right before the CRM) ----------
-  slides.push(
-    [
-      "FOUR PILLARS, ONE UNIFIED HUB",
-      `Title: "Four Pillars, One Unified Hub".`,
-      `Subtitle: "The architecture behind a business that runs without leaks."`,
-      `Show the four pillars arranged around a central hub labeled "SMB Smart CRM":`,
-      `  - AI & Automation`,
-      `  - SEO, Keywords & Listings`,
-      `  - Social Media`,
-      `  - Reputation`,
-      `IMAGERY: A clean hub-and-spoke architecture diagram. Central circle labeled "SMB Smart CRM" using the deck's accent color. Four pillar boxes evenly spaced around the hub, connected by lines or arrows showing data flowing INTO the CRM. Each pillar box gets a small 2D icon: a robot head (AI), a magnifying glass over a map pin (SEO), three overlapping social platform circles (Social), a 5-star badge (Reputation).`,
-      `Closing line: "Every pillar feeds the one place that runs your business."`,
-    ].join("\n"),
-  );
-
   // ---------- SLIDE: SMB Smart CRM (STATIC) ----------
   slides.push(
     [
@@ -671,7 +601,7 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
     "==================================================================",
     "DECK CONTENT",
     "==================================================================",
-    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. Each slide includes an IMAGERY line, follow it — these visuals are not optional, they carry the message.`,
+    `This is a Digital Presence Audit prepared by Dwayne Johnson at SMB Solutions for ${cn}. Use the slides below in order. Each slide includes an IMAGERY line, follow it, these visuals are not optional, they carry the message.`,
     "",
     "BRAND VOICE RULES:",
     "- Never say 'Vendasta'. The CRM is always 'SMB Smart CRM' or 'SMB Solutions CRM'.",
@@ -755,10 +685,12 @@ export async function startManusDeck(
     status: "running",
     prompt,
     startedAt: Date.now(),
+    completedAt: undefined,
     error: undefined,
     hasPdf: false,
     hasZip: false,
     hasPptx: false,
+    slideCount: undefined,
     logoAdjusted,
   });
   await storage.appendEvent(auditId, "manus_deck_requested", {
@@ -893,6 +825,7 @@ async function collectDeliverables(auditId: string, taskId: string): Promise<voi
     hasPdf: false,
     hasZip: false,
     hasPptx: false,
+    slideCount: undefined,
     completedAt: Date.now(),
   };
 
@@ -900,9 +833,22 @@ async function collectDeliverables(auditId: string, taskId: string): Promise<voi
   //    incremental previews; the final one is at the tail).
   if (buckets.pdf.length > 0) {
     const att = buckets.pdf[buckets.pdf.length - 1];
-    await downloadTo(att.url!, join(dir, "slides.pdf"));
+    const pdfPath = join(dir, "slides.pdf");
+    await downloadTo(att.url!, pdfPath);
     patch.hasPdf = true;
     patch.pdfFilename = att.filename || "slides.pdf";
+    // Count pages so the UI shows the real slide count, not a stale or invented one.
+    try {
+      const pdfParseMod = await import("pdf-parse");
+      const pdfParse = (pdfParseMod as any).default || pdfParseMod;
+      const buf = readFileSync(pdfPath);
+      const parsed = await pdfParse(buf);
+      if (typeof parsed?.numpages === "number" && parsed.numpages > 0) {
+        patch.slideCount = parsed.numpages;
+      }
+    } catch (err) {
+      console.warn(`[manus] failed to count PDF pages:`, err);
+    }
   }
 
   // 2. PPTX — store for users who want to edit.
