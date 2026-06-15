@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -67,6 +67,7 @@ import {
   Target,
   Presentation,
   Image as ImageIcon,
+  Copy,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -2082,6 +2083,117 @@ function ActivityTimeline({
   );
 }
 
+/* -------------------- ElevenLabs script block preview -------------------- */
+/**
+ * Parses the chunked ElevenLabs script into individual blocks (split on the
+ * `========== BLOCK N of M ... ==========` header inserted by
+ * chunkScriptForElevenLabs on the server) and renders each block in its own
+ * card with a Copy button. Krystal pastes block-by-block into ElevenLabs
+ * because the platform caps each generate at ~5,000 characters.
+ */
+function ScriptBlocksPreview({ script }: { script: string }) {
+  const { toast } = useToast();
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  const blocks = useMemo(() => {
+    if (!script.trim()) return [] as { header: string; body: string }[];
+    const headerRe = /^=+\s*BLOCK\s+\d+\s+of\s+\d+[^\n]*=+$/gm;
+    const headers: { idx: number; text: string }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = headerRe.exec(script)) !== null) {
+      headers.push({ idx: m.index, text: m[0] });
+    }
+    if (headers.length === 0) {
+      // No headers detected — treat the whole script as one block.
+      return [{ header: "Full script", body: script.trim() }];
+    }
+    const out: { header: string; body: string }[] = [];
+    for (let i = 0; i < headers.length; i++) {
+      const start = headers[i].idx + headers[i].text.length;
+      const end = i + 1 < headers.length ? headers[i + 1].idx : script.length;
+      out.push({
+        header: headers[i].text.replace(/=+/g, "").trim(),
+        body: script.slice(start, end).trim(),
+      });
+    }
+    return out;
+  }, [script]);
+
+  async function copyBlock(idx: number, body: string) {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopiedIdx(idx);
+      toast({
+        title: `Block ${idx + 1} copied`,
+        description: `${body.length.toLocaleString()} characters on your clipboard. Paste straight into ElevenLabs.`,
+      });
+      setTimeout(() => setCopiedIdx((cur) => (cur === idx ? null : cur)), 2000);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Clipboard access was blocked. Select the text and copy manually.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="grid gap-3" data-testid="script-blocks-preview">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Copy-ready blocks for ElevenLabs ({blocks.length})
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Each block is under the ElevenLabs 5,000-character cap. Copy them in order.
+        </div>
+      </div>
+      {blocks.map((b, i) => (
+        <div
+          key={i}
+          className="rounded-lg border border-card-border bg-secondary/30 p-3"
+          data-testid={`script-block-${i + 1}`}
+        >
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">
+                Block {i + 1} of {blocks.length}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {b.header || "Untitled section"} · {b.body.length.toLocaleString()} chars
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={copiedIdx === i ? "default" : "outline"}
+              onClick={() => copyBlock(i, b.body)}
+              data-testid={`button-copy-block-${i + 1}`}
+              className={copiedIdx === i ? "bg-emerald-600 text-white hover:bg-emerald-600/90" : ""}
+            >
+              {copiedIdx === i ? (
+                <>
+                  <Check className="mr-1.5 h-4 w-4" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="mr-1.5 h-4 w-4" />
+                  Copy Block
+                </>
+              )}
+            </Button>
+          </div>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-card-border bg-background p-2 font-mono text-xs leading-relaxed">
+{b.body}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* -------------------- Final Manus Deliverable -------------------- */
 function FinalDeliverableSection({
   auditId,
@@ -2423,16 +2535,24 @@ function FinalDeliverableSection({
               Generating script… this takes about 20 seconds.
             </div>
           ) : (
-            <Textarea
-              value={scriptText}
-              onChange={(e) => {
-                setScriptText(e.target.value);
-                setScriptDirty(true);
-              }}
-              className="h-96 max-h-[60vh] min-h-[24rem] font-mono text-xs"
-              spellCheck={false}
-              data-testid="textarea-elevenlabs-script"
-            />
+            <div className="grid max-h-[65vh] gap-4 overflow-y-auto pr-1">
+              <ScriptBlocksPreview script={scriptText} />
+              <div className="grid gap-1">
+                <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Full script (editable)
+                </Label>
+                <Textarea
+                  value={scriptText}
+                  onChange={(e) => {
+                    setScriptText(e.target.value);
+                    setScriptDirty(true);
+                  }}
+                  className="min-h-[16rem] font-mono text-xs"
+                  spellCheck={false}
+                  data-testid="textarea-elevenlabs-script"
+                />
+              </div>
+            </div>
           )}
 
           {scriptError && (
