@@ -2794,6 +2794,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
   const startUrl = `${API_BASE}/api/audits/${auditId}/send-to-manus`;
   const statusUrl = `${API_BASE}/api/audits/${auditId}/manus-status`;
   const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
+  const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
 
   // Initial load + polling loop.
   useEffect(() => {
@@ -3094,7 +3095,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                   <div className="text-xs text-muted-foreground">
                     {state.completedAt
                       ? `Generated ${formatStamp(state.completedAt)}`
-                      : "Download the assembled PDF."}
+                      : "Download the PDF or the labeled slide images (slide-01.png, slide-02.png, ...)."}
                   </div>
                 </div>
               </div>
@@ -3108,6 +3109,14 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
                     <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
                       <FileDown className="mr-1.5 h-4 w-4" />
                       Download PDF
+                    </a>
+                  </Button>
+                )}
+                {state.hasZip && (
+                  <Button asChild variant="outline" data-testid="button-download-deck-zip">
+                    <a href={zipUrl} target="_blank" rel="noopener noreferrer">
+                      <FileDown className="mr-1.5 h-4 w-4" />
+                      Download Slide Images (ZIP)
                     </a>
                   </Button>
                 )}

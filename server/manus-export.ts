@@ -19,9 +19,13 @@
  * Auth: x-manus-api-key header (Bearer fails on this account).
  * Endpoint: https://api.manus.ai
  */
-import { mkdirSync, writeFileSync, createWriteStream, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, createWriteStream, readFileSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { storage } from "./storage";
 import type { Audit, ReportData } from "@shared/schema";
 import { jsPDF } from "jspdf";
@@ -849,6 +853,17 @@ async function collectDeliverables(auditId: string, taskId: string): Promise<voi
     } catch (err) {
       console.warn(`[manus] failed to count PDF pages:`, err);
     }
+    // Render the PDF into one labeled PNG per slide (slide-01.png, slide-02.png, ...)
+    // and zip them up so the client can use individual slides as assets.
+    try {
+      const zipPath = await renderPdfToLabeledZip(pdfPath, dir);
+      if (zipPath) {
+        patch.hasZip = true;
+        patch.zipFilename = "slides.zip";
+      }
+    } catch (err) {
+      console.warn(`[manus] failed to render PDF into labeled slide PNGs:`, err);
+    }
   }
 
   // 2. PPTX — store for users who want to edit.
@@ -991,6 +1006,78 @@ function findImagesRecursively(dir: string): string[] {
     }
   }
   return out;
+}
+
+/**
+ * Render a delivered PDF into one labeled PNG per page (slide-01.png,
+ * slide-02.png, etc.) using pdftoppm, then zip the directory of PNGs as
+ * slides.zip. Requires poppler-utils on PATH (installed in the runtime
+ * Docker image).
+ *
+ * Returns the zip path on success, or null if pdftoppm is missing.
+ */
+async function renderPdfToLabeledZip(pdfPath: string, outDir: string): Promise<string | null> {
+  const imagesDir = join(outDir, "slide-images");
+  // Wipe any prior run so stale slide-XX.png files do not survive a re-export.
+  try { rmSync(imagesDir, { recursive: true, force: true }); } catch {}
+  mkdirSync(imagesDir, { recursive: true });
+
+  // pdftoppm flags:
+  //   -png    output PNG (vs default PPM)
+  //   -r 144  render at 144 dpi (sharp enough for marketing, small enough
+  //           that a 15-slide deck zips to ~5-8 MB)
+  //   -f 1    start at page 1 (default, but explicit is clearer)
+  // pdftoppm writes <prefix>-<n>.png where n is left-padded to match the
+  // number of digits in the last page. We pass prefix "slide" so files
+  // come out as slide-01.png, slide-02.png, ... when the deck has 10-99
+  // pages. For decks under 10 pages it would write slide-1.png; we
+  // rename below so the labeling is always two-digit consistent.
+  try {
+    await execFileAsync("pdftoppm", [
+      "-png",
+      "-r", "144",
+      pdfPath,
+      join(imagesDir, "slide"),
+    ]);
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      console.warn("[manus] pdftoppm not found on PATH, skipping labeled-slide ZIP");
+      return null;
+    }
+    throw err;
+  }
+
+  // Normalize filenames so they are always two-digit padded: slide-01.png,
+  // slide-02.png, ... even for short decks. pdftoppm uses the minimum
+  // width needed for the page count, so we re-pad to a stable convention.
+  const fs = await import("node:fs");
+  const files = readdirSync(imagesDir)
+    .filter((f) => /^slide-\d+\.png$/.test(f))
+    .sort();
+  if (files.length === 0) {
+    throw new Error("pdftoppm produced no PNG output");
+  }
+  files.forEach((f, i) => {
+    const want = `slide-${String(i + 1).padStart(2, "0")}.png`;
+    if (f !== want) {
+      fs.renameSync(join(imagesDir, f), join(imagesDir, want));
+    }
+  });
+
+  // Zip them up.
+  const AdmZipMod: any = await import("adm-zip");
+  const AdmZip = AdmZipMod.default || AdmZipMod;
+  const zip = new AdmZip();
+  const finalFiles = readdirSync(imagesDir)
+    .filter((f) => /^slide-\d+\.png$/.test(f))
+    .sort();
+  for (const f of finalFiles) {
+    zip.addLocalFile(join(imagesDir, f));
+  }
+  const zipPath = join(outDir, "slides.zip");
+  zip.writeZip(zipPath);
+  console.log(`[manus] wrote ${finalFiles.length} labeled slide PNGs to ${zipPath}`);
+  return zipPath;
 }
 
 export function deckZipPath(auditId: string): string {
