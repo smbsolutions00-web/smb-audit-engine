@@ -159,6 +159,37 @@ function deckDir(auditId: string) {
 }
 
 /**
+ * Persist the original client logo so a regenerate run can reuse it without
+ * the user re-uploading. Stored as `logo-original.<ext>` in the deck dir.
+ */
+function persistLogo(auditId: string, dataUrl: string): void {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return;
+  const [, mimeType, b64] = match;
+  const ext = (mimeType.split("/")[1] || "png").replace("svg+xml", "svg");
+  const buf = Buffer.from(b64, "base64");
+  const dir = deckDir(auditId);
+  writeFileSync(join(dir, `logo-original.${ext}`), buf);
+  // Also write a tiny sidecar with the mime type so we can rebuild a data URL on read.
+  writeFileSync(join(dir, "logo-original.mime"), mimeType);
+}
+
+function readPersistedLogo(auditId: string): string | null {
+  const dir = join(DECK_ROOT, auditId);
+  if (!existsSync(dir)) return null;
+  const candidates = readdirSync(dir).filter((f) => /^logo-original\.(png|jpe?g|webp|gif|svg)$/i.test(f));
+  if (!candidates.length) return null;
+  const file = join(dir, candidates[0]);
+  const buf = readFileSync(file);
+  let mime = "image/png";
+  try {
+    const mimePath = join(dir, "logo-original.mime");
+    if (existsSync(mimePath)) mime = readFileSync(mimePath, "utf8").trim() || mime;
+  } catch {}
+  return `data:${mime};base64,${buf.toString("base64")}`;
+}
+
+/**
  * Logo preparation: ALWAYS composite the uploaded logo onto a white
  * rounded-corner card before sending to Manus. The Glamour template uses
  * a dark cover, so any logo with dark text (Fiorina-style) becomes invisible
@@ -255,6 +286,9 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
   const seo = report?.pillars?.seoListings;
   const rep = report?.pillars?.reputation;
   const social = report?.pillars?.socialMedia;
+  const live = (report as any)?.liveValidation;
+  const gbpRating: number | null = live?.gbp?.rating ?? null;
+  const gbpReviewCount: number | null = live?.gbp?.reviewCount ?? null;
 
   const ranking = report?.seoDeep?.rankingKeywords?.slice(0, 3) || [];
   const opportunity = report?.seoDeep?.opportunityKeywords?.slice(0, 7) || [];
@@ -388,25 +422,40 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
 
   for (const p of problemPillars) {
     if (p.key === "ai") {
+      const aiBullets: string[] = [];
+      if (aiAbsent.length) {
+        aiBullets.push(`  ${cn} is NOT cited on these AI assistants: ${aiAbsent.map((a) => a.platform).join(", ")}.`);
+      } else {
+        aiBullets.push(`  ${cn} is not cited on the major AI platforms audited.`);
+      }
+      if (aiPresent.length) {
+        aiBullets.push(`  ${cn} IS cited on: ${aiPresent.map((a) => a.platform).join(", ")}.`);
+      }
+      (p.gaps || []).forEach((g) => aiBullets.push(`  - ${g}`));
+      if (aiBullets.length < 3) {
+        const fallbacks = [
+          `  - No 24/7 capture layer for after-hours phone, chat, and form inquiries.`,
+          `  - No automated follow-up sequence after first contact, so warm leads cool quickly.`,
+          `  - No unified inbox routing messages from phone, chat, email, and social into one queue.`,
+        ];
+        for (const f of fallbacks) {
+          if (aiBullets.length >= 3) break;
+          if (!aiBullets.includes(f)) aiBullets.push(f);
+        }
+      }
       slides.push(
         [
           "AI & AUTOMATION",
           `Title: "AI & Automation".`,
           `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
           `Section 1, The Gap:`,
-          aiAbsent.length
-            ? `  ${cn} is NOT cited on these AI assistants: ${aiAbsent.map((a) => a.platform).join(", ")}.`
-            : `  ${cn} is not cited on the major AI platforms audited.`,
-          aiPresent.length
-            ? `  ${cn} IS cited on: ${aiPresent.map((a) => a.platform).join(", ")}.`
-            : "",
-          ...(p.gaps || []).map((g) => `  - ${g}`),
+          ...aiBullets,
           `  Key insight: Every search that goes to an AI today is a customer ${cn} cannot recover.`,
           `Section 2, The Answer:`,
           `  A 24/7 AI Workforce that captures every lead and inquiry, across phone, chat, email, and social, and routes them into one unified inbox.`,
           `  Core agents: AI Receptionist, Chat Agent, Support Agent, Follow-Up Agent, Routing Agent.`,
           `  Outcome line: "Never miss a lead or customer inquiry again."`,
-          `IMAGERY: A row of small 2D agent icons (headset for Receptionist, chat bubble for Chat Agent, lifebuoy for Support, clock for Follow-Up, branching arrows for Routing). Also a small panel showing logos of the AI assistants checked (ChatGPT, Gemini, Claude, Perplexity), with green check or red X overlays based on the data above.`,
+          `IMAGERY: A row of small 2D agent icons (headset for Receptionist, chat bubble for Chat Agent, lifebuoy for Support, clock for Follow-Up, branching arrows for Routing). Also a small panel showing logos of the AI assistants checked (ChatGPT, Gemini, Claude, Perplexity), with green check or red X overlays based on the data above. Render the bullet list above as visible text cards on the slide, do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -475,19 +524,32 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       continue;
     }
     if (p.key === "social") {
+      const socialBullets: string[] = [];
+      (p.strengths || []).forEach((s) => socialBullets.push(`  - What is working: ${s}`));
+      (p.gaps || []).forEach((g) => socialBullets.push(`  - What is being missed: ${g}`));
+      if (socialBullets.length < 3) {
+        const fallbacks = [
+          `  - Posting cadence is inconsistent across platforms, gaps weaken algorithmic reach.`,
+          `  - Content is not repurposed across Facebook, Instagram, TikTok, and LinkedIn, so each platform fights for net-new effort.`,
+          `  - No central calendar or approval flow, which makes scaling beyond the owner's bandwidth impossible.`,
+        ];
+        for (const f of fallbacks) {
+          if (socialBullets.length >= 3) break;
+          if (!socialBullets.includes(f)) socialBullets.push(f);
+        }
+      }
       slides.push(
         [
           "SOCIAL MEDIA",
           `Title: "Social Media".`,
           `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
           `Section 1, The Gap:`,
-          ...((p.strengths || []).map((s) => `  - What is working: ${s}`)),
-          ...((p.gaps || []).map((g) => `  - What is being missed: ${g}`)),
+          ...socialBullets,
           `  Key insight: Manual posting on every platform every week is unsustainable. This is where burnout starts.`,
           `Section 2, The Answer:`,
           `  An AI-assisted content calendar across Facebook, Instagram, TikTok, and LinkedIn. Posts drafted, scheduled, and tracked from one dashboard.`,
           `  Outcome line: "Stay visible and relevant without constant manual effort."`,
-          `IMAGERY: A horizontal row of social platform icons (Facebook, Instagram, TikTok, LinkedIn, YouTube) with engagement indicators. Below them, a mini monthly calendar grid showing colored content blocks scheduled across the month, illustrating an AI-driven posting cadence.`,
+          `IMAGERY: A horizontal row of social platform icons (Facebook, Instagram, TikTok, LinkedIn, YouTube) with engagement indicators. Below them, a mini monthly calendar grid showing colored content blocks scheduled across the month, illustrating an AI-driven posting cadence. Render the bullet list above as visible text cards on the slide, do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -495,19 +557,40 @@ function buildPrompt(audit: Audit, report: ReportData | null): string {
       continue;
     }
     if (p.key === "reputation") {
+      // Build at least 3 concrete gap bullets even when strengths/gaps arrays
+      // are empty, otherwise Manus renders the slide header-only.
+      const repGapBullets: string[] = [];
+      (p.strengths || []).forEach((s) => repGapBullets.push(`  - What is working: ${s}`));
+      (p.gaps || []).forEach((g) => repGapBullets.push(`  - What is being missed: ${g}`));
+      if (gbpRating !== null && gbpReviewCount !== null) {
+        repGapBullets.push(
+          `  - Google Business Profile sits at ${gbpRating.toFixed(1)} stars across ${gbpReviewCount.toLocaleString()} reviews. Volume and velocity, not just stars, drive ranking.`,
+        );
+      }
+      if (repGapBullets.length < 3) {
+        // Canned fallbacks so the slide always carries a story.
+        const fallbacks = [
+          `  - No structured review request cadence after each transaction. Most customers are happy but never asked.`,
+          `  - Reviews are not consistently responded to within 24 hours, which Google weighs as a trust signal.`,
+          `  - Review volume is not flowing into Google Business Profile at the pace local competitors set.`,
+        ];
+        for (const f of fallbacks) {
+          if (repGapBullets.length >= 3) break;
+          if (!repGapBullets.includes(f)) repGapBullets.push(f);
+        }
+      }
       slides.push(
         [
           "REPUTATION",
           `Title: "Reputation".`,
           `Score line: ${p.score ?? "?"}/100${p.grade ? ` (Grade ${p.grade})` : ""}.`,
           `Section 1, The Gap:`,
-          ...((p.strengths || []).map((s) => `  - What is working: ${s}`)),
-          ...((p.gaps || []).map((g) => `  - What is being missed: ${g}`)),
+          ...repGapBullets,
           `  Key insight: Stars do not collect themselves. Without a system to ask, follow up, and respond, the next ten reviews could go either way.`,
           `Section 2, The Answer:`,
           `  A reputation system: automated review requests after every transaction, fast review responses, and 5-star reviews flowing into Google Business Profile on a steady cadence.`,
           `  Outcome line: "Turn trust into more calls, bookings, and sales."`,
-          `IMAGERY: A prominent row of five gold stars across the top. Underneath, a "Review Funnel" diagram showing the steps: Transaction, Automated SMS/email request, Customer review, Owner response. Include a sample 5-star Google review card mockup with a generic happy-customer avatar.`,
+          `IMAGERY: A prominent row of five gold stars across the top. Underneath, a "Review Funnel" diagram showing the steps: Transaction, Automated SMS/email request, Customer review, Owner response. Include a sample 5-star Google review card mockup with a generic happy-customer avatar. Render these bullets as visible text cards on the slide body, do not leave the body area empty.`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -648,10 +731,22 @@ export async function startManusDeck(
   const prompt = buildPrompt(audit, report);
   const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
 
+  // Resolve the logo: explicit upload wins, otherwise reuse a previously
+  // persisted one from this audit's deck folder so the user does not have
+  // to re-upload on every regenerate.
+  let effectiveLogoDataUrl: string | undefined = opts.logoDataUrl;
+  if (!effectiveLogoDataUrl || !/^data:image\//.test(effectiveLogoDataUrl)) {
+    const reused = readPersistedLogo(auditId);
+    if (reused) {
+      effectiveLogoDataUrl = reused;
+      console.log(`[manus] reusing previously-uploaded logo for ${auditId}`);
+    }
+  }
+
   let logoAdjusted = false;
-  if (opts.logoDataUrl && /^data:image\//.test(opts.logoDataUrl)) {
+  if (effectiveLogoDataUrl && /^data:image\//.test(effectiveLogoDataUrl)) {
     // Smart logo prep: pad onto white background if it's dark-on-dark.
-    const prepared = await prepareLogo(opts.logoDataUrl);
+    const prepared = await prepareLogo(effectiveLogoDataUrl);
     logoAdjusted = prepared.adjusted;
     const finalDataUrl = prepared.dataUrl;
     const match = finalDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -663,6 +758,12 @@ export async function startManusDeck(
         mime_type: mimeType,
         filename: `logo.${mimeType.split("/")[1]?.replace("svg+xml", "svg") || "png"}`,
       });
+    }
+    // Persist the ORIGINAL upload (pre-prep) so subsequent regenerates can
+    // reuse the same source asset.
+    if (opts.logoDataUrl) {
+      try { persistLogo(auditId, opts.logoDataUrl); }
+      catch (err) { console.warn(`[manus] failed to persist logo for ${auditId}:`, err); }
     }
   }
 

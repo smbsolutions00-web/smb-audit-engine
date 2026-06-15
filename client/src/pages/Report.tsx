@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -2796,6 +2796,25 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
   const pdfUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-pdf`;
   const zipUrl = `${API_BASE}/api/audits/${auditId}/manus-deck-zip`;
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Manual refresh handler (button), separate from the polling loop so we
+  // can show a spinning icon while it runs without disturbing the loop.
+  const refreshStatus = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const res = await fetch(statusUrl, { credentials: "include" });
+      if (res.ok) {
+        const json = (await res.json()) as ManusDeckState;
+        setState(json);
+      }
+    } catch {
+      // Swallow — the polling loop will pick it up.
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [statusUrl]);
+
   // Initial load + polling loop.
   useEffect(() => {
     let cancelled = false;
@@ -3062,20 +3081,33 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
               <div className="min-w-0">
                 <div className="text-sm font-medium">Manus is generating slides</div>
                 <div className="text-xs text-muted-foreground">
-                  Started {formatStamp(state.startedAt)}. Elapsed: {elapsedLabel()}. Image-mode decks usually take five to fifteen minutes.
+                  Started {formatStamp(state.startedAt)}. Elapsed: {elapsedLabel()}. Decks usually finish in three to eight minutes.
                 </div>
               </div>
             </div>
-            {state.taskUrl && (
-              <a
-                href={state.taskUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-accent underline-offset-2 hover:underline"
+            <div className="flex flex-wrap items-center gap-3">
+              {state.taskUrl && (
+                <a
+                  href={state.taskUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-accent underline-offset-2 hover:underline"
+                >
+                  Open the live Manus task
+                </a>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={refreshStatus}
+                disabled={isRefreshing}
+                data-testid="button-manus-refresh"
               >
-                Open the live Manus task
-              </a>
-            )}
+                <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                Check for updates
+              </Button>
+            </div>
           </div>
         )}
 
