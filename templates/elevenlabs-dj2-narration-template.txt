@@ -9,15 +9,15 @@ Everything else can stay consistent.
 
 ***
 
-## ELEVENLABS NARRATION TEMPLATE – DJ #2
+## ELEVENLABS NARRATION TEMPLATE: DJ #2
 
 ### Intro
 
 [light, warm, slightly playful]  
-Hello, before we jump in, let me introduce myself, [OWNER NAME/S].
+Hello, before we jump in, let me introduce myself.
 
 [conversational, confident]  
-My name is DJ. You can just call me DJ Number Two. I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Our team has taken a deep dive into [BUSINESS NAME], and I wanted to start by saying we really love the services you’re offering and the potential this practice has, not only in the [CITY] area, but nationwide.
+[OWNER NAME/S], my name is DJ. You can just call me DJ Number Two. I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Our team has taken a deep dive into [BUSINESS NAME], and I wanted to start by saying we really love the services you’re offering and the potential this practice has, not only in the [CITY] area, but nationwide.
 
 [steady, credible]  
 I know this because I’ve been trained through hundreds of hours of listening, learning, and reviewing market data, and through more than 100,000 business and marketing conversations across every level of the market, from Fortune 50 CEOs all the way down to hardworking mom-and-pop companies.
@@ -42,7 +42,7 @@ Alright, let’s walk through your audit together.
 
 ***
 
-### Slide 1 — Cover
+### Slide 1: Cover
 
 [warmly, conversational]  
 As we look at slide number one…
@@ -53,7 +53,7 @@ As we look at slide number one…
 
 ***
 
-### Slide 2 — Where You Stand Today (Four-Pillar Scoreboard)
+### Slide 2: Where You Stand Today (Four-Pillar Scoreboard)
 
 [confident, steady]  
 As we continue now looking at slide number two…
@@ -66,7 +66,7 @@ As we continue now looking at slide number two…
 
 ***
 
-### Slide 3 — Pillar I: AI and Automation
+### Slide 3: Pillar I: AI and Automation
 
 [calm, guiding]  
 As we continue now looking at slide number three, this is Pillar One, AI and Automation…
@@ -81,7 +81,7 @@ As we continue now looking at slide number three, this is Pillar One, AI and Aut
 
 ***
 
-### Slide 4 — Pillar II: SEO with Keywords and Listings (Overview)
+### Slide 4: Pillar II: SEO with Keywords and Listings (Overview)
 
 [more serious, focused]  
 As we continue now looking at slide number four, this is Pillar Two, SEO with Keywords and Listings…
@@ -94,7 +94,7 @@ As we continue now looking at slide number four, this is Pillar Two, SEO with Ke
 
 ***
 
-### Slide 5 — Keywords: What’s Working and What’s Missed
+### Slide 5: Keywords: What’s Working and What’s Missed
 
 [firm, analytical]  
 As we continue now looking at slide number five…
@@ -109,7 +109,7 @@ As we continue now looking at slide number five…
 
 ***
 
-### Slide 6 — Listings: The Directory Gap
+### Slide 6: Listings: The Directory Gap
 
 [calm, steady]  
 As we continue now looking at slide number six…
@@ -122,7 +122,7 @@ As we continue now looking at slide number six…
 
 ***
 
-### Slide 7 — Pillar III: Social Media Presence
+### Slide 7: Pillar III: Social Media Presence
 
 [empathetic, practical]  
 As we continue now looking at slide number seven, this is Pillar Three, Social Media Presence…
@@ -137,7 +137,7 @@ As we continue now looking at slide number seven, this is Pillar Three, Social M
 
 ***
 
-### Slide 8 — Pillar IV: Reputation Management and Trust
+### Slide 8: Pillar IV: Reputation Management and Trust
 
 [slight energy lift]  
 As we continue now looking at slide number eight, this is Pillar Four, Reputation Management and Trust…
@@ -152,7 +152,7 @@ As we continue now looking at slide number eight, this is Pillar Four, Reputatio
 
 ***
 
-### Slide 9 — SMB Smart CRM: The Unified Hub
+### Slide 9: SMB Smart CRM: The Unified Hub
 
 [organized, momentum-building]  
 As we continue now looking at slide number nine…
@@ -167,7 +167,7 @@ As we continue now looking at slide number nine…
 
 ***
 
-### Slide 10 — Four Pillars, One Hub (Recap)
+### Slide 10: Four Pillars, One Hub (Recap)
 
 [steady, integrative]  
 As we continue now looking at slide number ten…
@@ -178,7 +178,7 @@ As we continue now looking at slide number ten…
 
 ***
 
-### Slide 11 — Three Focused Steps for the Next 90 Days
+### Slide 11: Three Focused Steps for the Next 90 Days
 
 [organized, momentum-building]  
 As we continue now looking at slide number eleven…
@@ -189,7 +189,7 @@ As we continue now looking at slide number eleven…
 
 ***
 
-### Slide 12 — Close
+### Slide 12: Close
 
 [hopeful, confident]  
 And as we close on slide number twelve…
