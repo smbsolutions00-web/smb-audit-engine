@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import Login from "@/pages/Login";
+import ForcePasswordChange from "@/pages/ForcePasswordChange";
 import { Loader2 } from "lucide-react";
 
 interface AuthMe {
   authEnabled: boolean;
   signedIn: boolean;
   email: string | null;
+  role: "admin" | "member" | null;
+  mustChange: boolean;
 }
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
@@ -22,10 +25,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Auth disabled (local dev) — pass through
+  // Auth disabled (local dev), pass through
   if (!data || !data.authEnabled) return <>{children}</>;
 
   if (!data.signedIn) return <Login />;
+
+  if (data.mustChange) return <ForcePasswordChange email={data.email || ""} />;
 
   return <>{children}</>;
 }

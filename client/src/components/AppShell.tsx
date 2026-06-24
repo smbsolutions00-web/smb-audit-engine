@@ -1,20 +1,41 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, FilePlus2, Settings as SettingsIcon, LogOut } from "lucide-react";
+import { LayoutDashboard, FilePlus2, Settings as SettingsIcon, LogOut, Users } from "lucide-react";
 import { Logo } from "./Logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
-const navItems = [
+interface AuthMe {
+  authEnabled: boolean;
+  signedIn: boolean;
+  email: string | null;
+  role: "admin" | "member" | null;
+  mustChange: boolean;
+}
+
+const baseNavItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, testId: "link-dashboard" },
   { href: "/new", label: "New Audit", icon: FilePlus2, testId: "link-new-audit" },
   { href: "/settings", label: "Settings", icon: SettingsIcon, testId: "link-settings" },
 ];
+const adminNavItem = {
+  href: "/admin/users",
+  label: "Users",
+  icon: Users,
+  testId: "link-admin-users",
+};
+
+function useNavItems() {
+  const { data } = useQuery<AuthMe>({ queryKey: ["/api/auth/me"], staleTime: 60_000 });
+  if (data?.role === "admin") return [...baseNavItems, adminNavItem];
+  return baseNavItems;
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
+  const navItems = useNavItems();
 
   return (
     <div className="min-h-screen bg-background">
@@ -93,8 +114,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     </div>
   );
 }
-
-interface AuthMe { authEnabled: boolean; signedIn: boolean; email: string | null; }
 
 async function signOut() {
   await apiRequest("POST", "/api/auth/logout");

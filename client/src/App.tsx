@@ -11,6 +11,7 @@ import NewAudit from "@/pages/NewAudit";
 import Processing from "@/pages/Processing";
 import Report from "@/pages/Report";
 import Settings from "@/pages/Settings";
+import AdminUsers from "@/pages/AdminUsers";
 import NotFound from "@/pages/not-found";
 
 function AppRouter() {
@@ -22,6 +23,7 @@ function AppRouter() {
         <Route path="/processing/:id" component={Processing} />
         <Route path="/audit/:id" component={Report} />
         <Route path="/settings" component={Settings} />
+        <Route path="/admin/users" component={AdminUsers} />
         <Route component={NotFound} />
       </Switch>
     </AppShell>
