@@ -30,6 +30,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import {
+  countUsers,
   createUser,
   deleteUser,
   getUserByEmail,
@@ -171,6 +172,67 @@ export function registerAuthRoutes(app: Express) {
       return res.status(400).json({ message: "Email and password are required" });
     }
 
+    // ---------- env-var direct login (recovery path) ----------
+    // If the credentials match ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD exactly,
+    // we let the user in regardless of DB state. We then auto-heal the DB row
+    // (creating or repairing the admin user) so subsequent logins via the
+    // normal DB path also work. This is the recovery mechanism that ensures
+    // the platform owner is never locked out as long as the env vars are set.
+    const envAdminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+    const envAdminPassword = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
+    if (
+      envAdminEmail &&
+      envAdminPassword &&
+      envAdminPassword.length >= 8 &&
+      email === envAdminEmail &&
+      password === envAdminPassword
+    ) {
+      // Heal or create the DB row so the rest of the app works normally.
+      let user = getUserByEmail(envAdminEmail);
+      if (!user) {
+        try {
+          await createUser({
+            email: envAdminEmail,
+            password: envAdminPassword,
+            role: "admin",
+            mustChange: false,
+          });
+          user = getUserByEmail(envAdminEmail);
+          console.log(`[auth] Env-var login healed missing admin row for ${envAdminEmail}`);
+        } catch (err) {
+          console.error("[auth] Could not create admin row during env-var login:", err);
+        }
+      } else {
+        // Make sure role is admin and password hash matches the env var so
+        // future DB logins succeed too.
+        if (user.role !== "admin") setRole(user.id, "admin");
+        try {
+          await setPassword(user.id, envAdminPassword, true);
+          user = getUserByEmail(envAdminEmail);
+          console.log(`[auth] Env-var login re-synced admin password for ${envAdminEmail}`);
+        } catch (err) {
+          console.error("[auth] Could not re-sync admin password during env-var login:", err);
+        }
+      }
+
+      if (!user) {
+        return res.status(500).json({ message: "Env-var login succeeded but DB row could not be created" });
+      }
+
+      markLoggedIn(user.id);
+      issueSessionCookie(res, {
+        uid: user.id,
+        email: user.email,
+        role: "admin",
+        kind: "session",
+      });
+      return res.json({
+        ok: true,
+        user: { email: user.email, role: "admin", mustChange: false },
+      });
+    }
+
+    // ---------- normal DB-backed login ----------
     const user = await verifyPassword(email, password);
     if (!user) {
       return res.status(401).json({ message: "Invalid email or password" });
@@ -191,6 +253,26 @@ export function registerAuthRoutes(app: Express) {
         role: user.role,
         mustChange: user.must_change === 1,
       },
+    });
+  });
+
+  // ---------- diagnostic (no secrets leaked) ----------
+  app.get("/api/auth/debug", (_req: Request, res: Response) => {
+    const { enabled, secret } = getEnv();
+    const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+    const adminPw = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
+    const adminRow = adminEmail ? getUserByEmail(adminEmail) : null;
+    return res.json({
+      authEnabled: enabled,
+      sessionSecretSet: Boolean(secret),
+      adminEmailSet: Boolean(adminEmail),
+      adminEmailValue: adminEmail || null,
+      adminPasswordSet: Boolean(adminPw),
+      adminPasswordLength: adminPw.length,
+      adminPasswordMeetsMin: adminPw.length >= 8,
+      adminRowExists: Boolean(adminRow),
+      adminRowRole: adminRow?.role || null,
+      totalUsersInDb: countUsers(),
     });
   });
 
