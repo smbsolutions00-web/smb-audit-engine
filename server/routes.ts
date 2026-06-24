@@ -99,9 +99,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const publicPaths = new Set([
       "/health",
       "/auth/me",
+      "/auth/login",
+      "/auth/logout",
+      "/auth/debug",
+      // legacy magic-link endpoints, harmless to keep public
       "/auth/request-link",
       "/auth/verify",
-      "/auth/logout",
     ]);
     if (publicPaths.has(req.path)) return next();
     return requireAuth(req, res, next);
