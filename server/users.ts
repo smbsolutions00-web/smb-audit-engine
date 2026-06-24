@@ -171,17 +171,26 @@ export function setRole(userId: string, role: "admin" | "member") {
 }
 
 /**
- * Seed the admin account on boot.
+ * Seed (or self-heal) the admin account on boot.
  *
- * Behavior:
- *   - If users table is empty AND ADMIN_EMAIL is set, create that user as
- *     admin with password from ADMIN_INITIAL_PASSWORD (or a random one
- *     printed to the server log if not set). must_change defaults to true so
- *     the first login forces a password change.
- *   - If users exist, do nothing.
+ * Behavior (idempotent, runs on every boot):
+ *   1. Resolve admin email from ADMIN_EMAIL (or first ALLOWED_EMAILS entry).
+ *   2. If that email does NOT exist as a user, create it as admin with
+ *      ADMIN_INITIAL_PASSWORD (or a random password printed to logs).
+ *      must_change = true so first login forces a password change.
+ *   3. If that email exists but ADMIN_RESET_PASSWORD="true" is set, reset its
+ *      password to ADMIN_INITIAL_PASSWORD and set must_change=true. Use this
+ *      to recover a locked-out admin: set the env var, redeploy, log in,
+ *      then unset the env var.
+ *   4. If that email exists with role != admin, promote it to admin.
+ *   5. Otherwise, do nothing.
+ *
+ * This replaces the old "only seed when table is empty" logic which silently
+ * skipped seeding if data.db already had any rows from a prior deploy.
  */
 export async function seedAdminIfNeeded() {
-  if (countUsers() > 0) return;
+  const totalUsers = countUsers();
+  console.log(`[users] Boot: ${totalUsers} user(s) in database.`);
 
   // Prefer ADMIN_EMAIL; fall back to the first entry in the legacy
   // ALLOWED_EMAILS env var so the rollout doesn't lock anyone out if they
@@ -200,34 +209,77 @@ export async function seedAdminIfNeeded() {
     }
   }
   if (!adminEmail) {
-    console.warn(
-      "[users] No users in DB and neither ADMIN_EMAIL nor ALLOWED_EMAILS is set. Set ADMIN_EMAIL and redeploy to seed an admin account.",
-    );
+    if (totalUsers === 0) {
+      console.warn(
+        "[users] No users in DB and neither ADMIN_EMAIL nor ALLOWED_EMAILS is set. Set ADMIN_EMAIL and redeploy to seed an admin account.",
+      );
+    }
     return;
   }
 
+  const existing = getUserByEmail(adminEmail);
+  const resetRequested = (process.env.ADMIN_RESET_PASSWORD || "").trim().toLowerCase() === "true";
+
   let initialPassword = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
   let generated = false;
-  if (!initialPassword || initialPassword.length < 8) {
-    initialPassword = randomUUID().replace(/-/g, "").slice(0, 16);
-    generated = true;
+
+  // ----- CASE 1: admin email does not exist yet -> create it -----
+  if (!existing) {
+    if (!initialPassword || initialPassword.length < 8) {
+      initialPassword = randomUUID().replace(/-/g, "").slice(0, 16);
+      generated = true;
+    }
+    await createUser({
+      email: adminEmail,
+      password: initialPassword,
+      role: "admin",
+      mustChange: true,
+    });
+    console.log("====================================================");
+    console.log("[users] Seeded admin account:");
+    console.log(`        email:    ${adminEmail}`);
+    if (generated) {
+      console.log(`        password: ${initialPassword}    (CHANGE ON FIRST LOGIN)`);
+      console.log("        (Save this password now. It will not be shown again.)");
+    } else {
+      console.log("        password: (taken from ADMIN_INITIAL_PASSWORD env var)");
+    }
+    console.log("====================================================");
+    return;
   }
 
-  await createUser({
-    email: adminEmail,
-    password: initialPassword,
-    role: "admin",
-    mustChange: true,
-  });
-
-  console.log("====================================================");
-  console.log("[users] Seeded admin account:");
-  console.log(`        email:    ${adminEmail}`);
-  if (generated) {
-    console.log(`        password: ${initialPassword}    (CHANGE ON FIRST LOGIN)`);
-    console.log("        (Save this password now. It will not be shown again.)");
-  } else {
-    console.log("        password: (taken from ADMIN_INITIAL_PASSWORD env var)");
+  // ----- CASE 2: admin email exists and reset was requested -----
+  if (resetRequested) {
+    if (!initialPassword || initialPassword.length < 8) {
+      initialPassword = randomUUID().replace(/-/g, "").slice(0, 16);
+      generated = true;
+    }
+    await setPassword(existing.id, initialPassword, false);
+    // setPassword with clearMustChange=false sets must_change=1 (force change)
+    // Ensure admin role too in case it was demoted.
+    if (existing.role !== "admin") {
+      setRole(existing.id, "admin");
+    }
+    console.log("====================================================");
+    console.log("[users] ADMIN_RESET_PASSWORD=true -> reset admin password:");
+    console.log(`        email:    ${adminEmail}`);
+    if (generated) {
+      console.log(`        password: ${initialPassword}    (CHANGE ON FIRST LOGIN)`);
+    } else {
+      console.log("        password: (taken from ADMIN_INITIAL_PASSWORD env var)");
+    }
+    console.log("        UNSET ADMIN_RESET_PASSWORD after you log in.");
+    console.log("====================================================");
+    return;
   }
-  console.log("====================================================");
+
+  // ----- CASE 3: admin email exists but role is wrong -> promote -----
+  if (existing.role !== "admin") {
+    setRole(existing.id, "admin");
+    console.log(`[users] Promoted ${adminEmail} to admin (was ${existing.role}).`);
+    return;
+  }
+
+  // ----- CASE 4: admin already exists and is correct -----
+  console.log(`[users] Admin account ${adminEmail} already exists. No action taken.`);
 }
