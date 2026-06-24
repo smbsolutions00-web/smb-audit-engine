@@ -246,8 +246,8 @@ export default function Report() {
             className="bg-accent text-accent-foreground hover:bg-accent/90"
             data-testid="button-jump-to-manus"
           >
-            <Send className="mr-1.5 h-4 w-4" />
-            Send to Manus
+            <Copy className="mr-1.5 h-4 w-4" />
+            Copy Manus Prompt
           </Button>
           <Button
             variant="outline"
