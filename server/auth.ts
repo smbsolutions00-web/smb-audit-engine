@@ -45,8 +45,14 @@ import {
 const SESSION_COOKIE = "smb_session";
 const SESSION_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
 
+// TEMPORARY: auth is force-disabled in the build because Render env vars are
+// not reaching the process. Owner asked to disable auth entirely until we can
+// sort out the Render configuration in a later session. To re-enable, flip
+// AUTH_FORCE_DISABLED back to false (or remove this override).
+const AUTH_FORCE_DISABLED = true;
+
 function getEnv() {
-  const enabled = process.env.AUTH_ENABLED === "true";
+  const enabled = !AUTH_FORCE_DISABLED && process.env.AUTH_ENABLED === "true";
   const secret = process.env.SESSION_SECRET || "";
   return { enabled, secret };
 }
