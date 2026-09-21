@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import type { Server } from "node:http";
 import multer from "multer";
-import { registerAuthRoutes, requireAuth } from "./auth";
+import { registerAuthRoutes, requireAuth, requireSameOrigin, type SessionPayload } from "./auth";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync, existsSync, statSync, createReadStream } from "node:fs";
 import { join } from "node:path";
@@ -39,6 +39,13 @@ import {
   clearPersistedLogo,
   buildPrompt,
 } from "./manus-export";
+import {
+  createVoiceoverJob,
+  getVoiceoverCapabilities,
+  getVoiceoverFile,
+  getVoiceoverJob,
+  listVoiceoverJobs,
+} from "./voiceovers";
 
 // Allowed mime types for ingest uploads (intake form, vendor audit, keysearch)
 const INTAKE_AUDIT_MIMES = new Set([
@@ -90,7 +97,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  /* Magic-link auth routes (always registered — they no-op when AUTH_ENABLED!="true") */
+  /* Same-origin checks must be registered before auth routes so login,
+     password changes, and admin mutations are covered too. */
+  app.use("/api", requireSameOrigin);
+
   registerAuthRoutes(app);
 
   /* Protect /api/* with the session cookie when AUTH_ENABLED="true".
@@ -101,13 +111,70 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "/auth/me",
       "/auth/login",
       "/auth/logout",
-      "/auth/debug",
       // legacy magic-link endpoints, harmless to keep public
       "/auth/request-link",
       "/auth/verify",
     ]);
     if (publicPaths.has(req.path)) return next();
     return requireAuth(req, res, next);
+  });
+
+  app.get("/api/voiceover/voices", (_req, res) => {
+    try {
+      res.json(getVoiceoverCapabilities());
+    } catch (err) {
+      res.status(503).json({ message: err instanceof Error ? err.message : "Voice configuration is invalid." });
+    }
+  });
+
+  app.get("/api/audits/:id/voiceovers", async (req, res) => {
+    const auditId = String(req.params.id);
+    const audit = await storage.getAudit(auditId);
+    if (!audit) return res.status(404).json({ message: "Audit not found" });
+    return res.json({ jobs: listVoiceoverJobs(auditId) });
+  });
+
+  app.post("/api/audits/:id/voiceovers", async (req, res) => {
+    try {
+      const auditId = String(req.params.id);
+      const audit = await storage.getAudit(auditId);
+      if (!audit) return res.status(404).json({ message: "Audit not found" });
+      const script = typeof req.body?.script === "string" ? req.body.script : "";
+      const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId : "";
+      const user = (req as Request & { user?: SessionPayload }).user;
+      const job = await createVoiceoverJob({
+        auditId,
+        requestedBy: user?.email || "authenticated-user",
+        voiceId,
+        script,
+      });
+      return res.status(202).json({ job });
+    } catch (err) {
+      return res.status(400).json({ message: err instanceof Error ? err.message : "Could not start voiceover generation." });
+    }
+  });
+
+  app.get("/api/audits/:id/voiceovers/:jobId", async (req, res) => {
+    const auditId = String(req.params.id);
+    const jobId = String(req.params.jobId);
+    const audit = await storage.getAudit(auditId);
+    if (!audit) return res.status(404).json({ message: "Audit not found" });
+    const job = getVoiceoverJob(auditId, jobId);
+    if (!job) return res.status(404).json({ message: "Voiceover job not found" });
+    return res.json({ job });
+  });
+
+  app.get("/api/audits/:id/voiceovers/:jobId/download", async (req, res) => {
+    const auditId = String(req.params.id);
+    const jobId = String(req.params.jobId);
+    const audit = await storage.getAudit(auditId);
+    if (!audit) return res.status(404).json({ message: "Audit not found" });
+    const file = getVoiceoverFile(auditId, jobId);
+    if (!file) return res.status(404).json({ message: "Voiceover audio is not ready" });
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    file.stream.pipe(res);
   });
 
   /* Intake preview — extract intake data from an uploaded PDF WITHOUT creating
@@ -280,8 +347,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const audit = await storage.getAudit(req.params.id);
     if (!audit) return res.status(404).json({ message: "Audit not found" });
 
-    const body = req.body || {};
-    const allowed: (keyof typeof body)[] = [
+    const body = (req.body || {}) as Record<string, unknown>;
+    const allowed = [
       "clientName",
       "clientWebsite",
       "phone",
@@ -290,7 +357,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "industry",
       "contactName",
       "email",
-    ];
+    ] as const;
     const patch: Record<string, string | undefined> = {};
     for (const k of allowed) {
       if (typeof body[k] === "string") patch[k] = body[k].trim();
@@ -605,7 +672,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     finalUpload.single("manusPdf"),
     async (req, res) => {
       try {
-        const audit = await storage.getAudit(req.params.id);
+        const audit = await storage.getAudit(String(req.params.id));
         if (!audit) return res.status(404).json({ message: "Audit not found" });
         const file = (req as any).file as Express.Multer.File | undefined;
         if (!file) return res.status(400).json({ message: "manusPdf file is required" });
@@ -621,10 +688,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         intake.manusPdfPath = filePath;
         intake.finalDeliverableFormat = format;
         intake.manusPdfUploadedAt = Date.now();
-        await storage.updateAudit(req.params.id, {
+        await storage.updateAudit(String(req.params.id), {
           intakeData: JSON.stringify(intake),
         });
-        await storage.appendEvent(req.params.id, "manus_uploaded", {
+        await storage.appendEvent(String(req.params.id), "manus_uploaded", {
           format,
           sizeBytes: file.size,
         });
@@ -642,7 +709,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   );
 
-  /* Generate the ElevenLabs DJ #2 narration script from the Manus PDF.
+  /* Generate the ElevenLabs DJ-3 narration script from the Manus PDF.
      Returns a plain-text .txt download ready to paste into ElevenLabs. */
   app.get("/api/audits/:id/elevenlabs-script", async (req, res) => {
     try {
@@ -679,7 +746,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "") || "audit";
-      const filename = `${slug}-elevenlabs-dj2-script.txt`;
+      const filename = `${slug}-elevenlabs-dj3-script.txt`;
 
       // Pull the latest script_generated AND script_edited timestamps so the
       // UI can show "Generated Jun 14 at 6:07 PM" and know whether the cached
@@ -878,7 +945,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     imageUpload.single("logo"),
     async (req, res) => {
       try {
-        const audit = await storage.getAudit(req.params.id);
+        const audit = await storage.getAudit(String(req.params.id));
         if (!audit) return res.status(404).json({ message: "Audit not found" });
         if (audit.status !== "complete") {
           return res
@@ -906,7 +973,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const slideLimit = slideLimitRaw && /^\d+$/.test(slideLimitRaw)
           ? Math.max(1, Math.min(50, parseInt(slideLimitRaw, 10)))
           : undefined;
-        const { taskId, taskUrl } = await startManusDeck(req.params.id, {
+        const { taskId, taskUrl } = await startManusDeck(String(req.params.id), {
           logoDataUrl,
           clearLogo,
           resetTheme,

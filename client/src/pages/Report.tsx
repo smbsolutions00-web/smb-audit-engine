@@ -68,6 +68,7 @@ import {
   Presentation,
   Image as ImageIcon,
   Copy,
+  Volume2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -1957,10 +1958,17 @@ const EVENT_LABELS: Record<AuditEventType, string> = {
   failed: "Generation failed",
   rerun: "Audit re-run",
   manus_uploaded: "Manus PDF uploaded",
+  manus_deck_requested: "Manus deck requested",
+  manus_deck_complete: "Manus deck completed",
+  manus_deck_failed: "Manus deck failed",
   script_generated: "ElevenLabs script generated",
   script_edited: "Script edited",
+  voiceover_requested: "Voiceover requested",
+  voiceover_generated: "Voiceover generated",
+  voiceover_failed: "Voiceover failed",
   delivered: "Marked as delivered",
   marked_ready: "Marked as ready",
+  self_healed: "Audit state repaired",
 };
 
 function eventIcon(type: AuditEventType) {
@@ -1979,6 +1987,12 @@ function eventIcon(type: AuditEventType) {
       return <Sparkles className="h-3.5 w-3.5 text-accent" />;
     case "script_edited":
       return <Pencil className="h-3.5 w-3.5" />;
+    case "voiceover_requested":
+      return <Volume2 className="h-3.5 w-3.5" />;
+    case "voiceover_generated":
+      return <Volume2 className="h-3.5 w-3.5 text-accent" />;
+    case "voiceover_failed":
+      return <XCircle className="h-3.5 w-3.5 text-destructive" />;
     case "delivered":
       return <Send className="h-3.5 w-3.5 text-accent" />;
     case "marked_ready":
@@ -2023,6 +2037,16 @@ function formatEventMeta(ev: AuditEvent): string {
   }
   if (ev.type === "script_edited" && m.chars != null) {
     return `${Number(m.chars).toLocaleString()} chars`;
+  }
+  if (ev.type === "voiceover_requested" || ev.type === "voiceover_generated") {
+    const parts: string[] = [];
+    if (m.voiceName) parts.push(String(m.voiceName));
+    if (m.chars != null) parts.push(`${Number(m.chars).toLocaleString()} chars`);
+    return parts.join(" \u00b7 ");
+  }
+  if (ev.type === "voiceover_failed" && m.message) {
+    const message = String(m.message);
+    return message.length > 80 ? `${message.slice(0, 77)}...` : message;
   }
   return "";
 }
@@ -2194,6 +2218,42 @@ function ScriptBlocksPreview({ script }: { script: string }) {
   );
 }
 
+interface ApprovedVoice {
+  id: string;
+  name: string;
+}
+
+interface VoiceoverCapabilities {
+  configured: boolean;
+  voices: ApprovedVoice[];
+  modelId: string;
+  outputFormat: string;
+  creditEstimateNote: string;
+}
+
+interface VoiceoverJob {
+  id: string;
+  status: "queued" | "generating" | "complete" | "failed";
+  voiceName: string;
+  modelId: string;
+  characterCount: number;
+  estimatedCredits: number;
+  segmentCount: number;
+  errorMessage: string | null;
+  downloadUrl?: string;
+}
+
+function countSpeechCharacters(script: string) {
+  return script
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line) => !/^={4,}\s*BLOCK\s+\d+\s+of\s+\d+/i.test(line.trim()))
+    .filter((line) => !/^#{1,6}\s+/.test(line.trim()))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim().length;
+}
+
 /* -------------------- Final Manus Deliverable -------------------- */
 function FinalDeliverableSection({
   auditId,
@@ -2220,17 +2280,77 @@ function FinalDeliverableSection({
   const [scriptDirty, setScriptDirty] = useState(false);
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
-  const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj2-script.txt");
+  const [scriptFilename, setScriptFilename] = useState("elevenlabs-dj3-script.txt");
   // "view" = read-only preview, "edit" = textarea editable. Two separate
   // dialog modes so Krystal can quickly read or copy a saved script without
   // accidentally typing into it, and still open Edit when she wants to tweak.
   const [scriptMode, setScriptMode] = useState<"view" | "edit">("view");
+  const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceoverCapabilities | null>(null);
+  const [selectedVoiceId, setSelectedVoiceId] = useState("");
+  const [voiceJob, setVoiceJob] = useState<VoiceoverJob | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceStarting, setVoiceStarting] = useState(false);
   const { toast } = useToast();
 
   const hasUploaded = !!uploadedAt;
   const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
   const downloadUrl = `${API_BASE}/api/audits/${auditId}/manus-pdf`;
   const scriptUrl = `${API_BASE}/api/audits/${auditId}/elevenlabs-script`;
+  const speechCharacterCount = useMemo(() => countSpeechCharacters(scriptText), [scriptText]);
+
+  async function loadVoiceCapabilities() {
+    try {
+      const res = await fetch(`${API_BASE}/api/voiceover/voices`, { credentials: "include" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Could not load approved voices.");
+      setVoiceCapabilities(json);
+      if (!selectedVoiceId && json.voices?.[0]?.id) setSelectedVoiceId(json.voices[0].id);
+    } catch (error) {
+      setVoiceError(error instanceof Error ? error.message : "Could not load approved voices.");
+    }
+  }
+
+  async function generateVoiceover() {
+    if (!scriptText.trim() || !selectedVoiceId) return;
+    setVoiceStarting(true);
+    setVoiceError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/audits/${auditId}/voiceovers`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script: scriptText, voiceId: selectedVoiceId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Could not start voiceover generation.");
+      setVoiceJob(json.job);
+      toast({ title: "Voiceover started", description: "You can keep this window open while narration is generated." });
+    } catch (error) {
+      setVoiceError(error instanceof Error ? error.message : "Could not start voiceover generation.");
+    } finally {
+      setVoiceStarting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!voiceJob || !["queued", "generating"].includes(voiceJob.status)) return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/audits/${auditId}/voiceovers/${voiceJob.id}`, { credentials: "include" });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.message || "Could not read generation status.");
+        setVoiceJob(json.job);
+        if (json.job.status === "complete") {
+          toast({ title: "Voiceover ready", description: "Preview or download the MP3 below." });
+          queryClient.invalidateQueries({ queryKey: ["/api/audits", auditId] });
+        }
+        if (json.job.status === "failed") setVoiceError(json.job.errorMessage || "Voiceover generation failed.");
+      } catch (error) {
+        setVoiceError(error instanceof Error ? error.message : "Could not read generation status.");
+      }
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [API_BASE, auditId, toast, voiceJob]);
 
   async function loadScript(opts: { regenerate?: boolean; peek?: boolean } = {}) {
     setScriptLoading(true);
@@ -2277,7 +2397,7 @@ function FinalDeliverableSection({
       }
       setScriptText(json.script || "");
       setScriptIsEdited(!!json.edited);
-      setScriptFilename(json.filename || "elevenlabs-dj2-script.txt");
+      setScriptFilename(json.filename || "elevenlabs-dj3-script.txt");
       setScriptDirty(false);
       if (opts.regenerate) {
         // Invalidate the audit query so the event log timeline picks up the
@@ -2294,6 +2414,7 @@ function FinalDeliverableSection({
   async function openScriptDialog(mode: "view" | "edit") {
     setScriptMode(mode);
     setScriptOpen(true);
+    if (!voiceCapabilities) void loadVoiceCapabilities();
     if (!scriptText) {
       // View is read-only and must NEVER trigger an expensive LLM call. Use
       // peek mode so the server only serves a cached script (and 404s if
@@ -2454,7 +2575,7 @@ function FinalDeliverableSection({
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              The ElevenLabs script is the DJ #2 narration written from this PDF.
+              The ElevenLabs script is the DJ-3 narration written from this PDF.
               Open it to preview, make edits, save, and download. First generation
               takes about 20 seconds.
             </p>
@@ -2563,7 +2684,7 @@ function FinalDeliverableSection({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkle className="h-5 w-5 text-accent" />
-              {scriptMode === "view" ? "View ElevenLabs DJ #2 Script" : "Edit ElevenLabs DJ #2 Script"}
+              {scriptMode === "view" ? "View ElevenLabs DJ-3 Script" : "Edit ElevenLabs DJ-3 Script"}
               <Badge
                 variant={scriptMode === "view" ? "secondary" : "default"}
                 className="ml-2 text-xs uppercase tracking-wide"
@@ -2614,6 +2735,73 @@ function FinalDeliverableSection({
                   spellCheck={false}
                   data-testid="textarea-elevenlabs-script"
                 />
+              </div>
+
+              <div className="grid gap-3 rounded-lg border border-card-border bg-secondary/30 p-4" data-testid="voiceover-generator">
+                <div className="flex items-start gap-3">
+                  <Volume2 className="mt-0.5 h-5 w-5 text-accent" />
+                  <div>
+                    <div className="text-sm font-semibold">Generate Voiceover</div>
+                    <p className="text-xs text-muted-foreground">
+                      Uses the current script and preserves Eleven v3 delivery tags. The API key stays on the server.
+                    </p>
+                  </div>
+                </div>
+
+                {voiceCapabilities?.configured ? (
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="approved-voice">Approved voice</Label>
+                      <Select value={selectedVoiceId} onValueChange={setSelectedVoiceId}>
+                        <SelectTrigger id="approved-voice" data-testid="select-approved-voice">
+                          <SelectValue placeholder="Select a voice" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {voiceCapabilities.voices.map((voice) => (
+                            <SelectItem key={voice.id} value={voice.id}>{voice.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        {speechCharacterCount.toLocaleString()} characters · about {speechCharacterCount.toLocaleString()} credits · {voiceCapabilities.modelId}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={generateVoiceover}
+                      disabled={!scriptText.trim() || !selectedVoiceId || voiceStarting || voiceJob?.status === "queued" || voiceJob?.status === "generating"}
+                      className="bg-accent text-accent-foreground hover:bg-accent/90"
+                      data-testid="button-generate-voiceover"
+                    >
+                      {voiceStarting || voiceJob?.status === "queued" || voiceJob?.status === "generating" ? (
+                        <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />Generating...</>
+                      ) : (
+                        <><Volume2 className="mr-1.5 h-4 w-4" />Generate MP3</>
+                      )}
+                    </Button>
+                  </div>
+                ) : voiceCapabilities ? (
+                  <p className="text-xs text-muted-foreground">
+                    Voiceover generation is not configured. An admin must add the server-side ElevenLabs key and approved voice IDs.
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading approved voices...</div>
+                )}
+
+                {voiceJob?.status === "complete" && voiceJob.downloadUrl && (
+                  <div className="grid gap-2 rounded-md border border-emerald-600/30 bg-emerald-500/5 p-3">
+                    <div className="text-xs text-muted-foreground">
+                      Ready · {voiceJob.voiceName} · {voiceJob.characterCount.toLocaleString()} characters · {voiceJob.segmentCount} segment{voiceJob.segmentCount === 1 ? "" : "s"}
+                    </div>
+                    <audio controls preload="metadata" className="w-full" src={`${API_BASE}${voiceJob.downloadUrl}`} data-testid="audio-voiceover-preview" />
+                    <Button asChild size="sm" variant="outline" className="w-fit">
+                      <a href={`${API_BASE}${voiceJob.downloadUrl}`} download data-testid="button-download-voiceover">
+                        <FileDown className="mr-1.5 h-4 w-4" />Download MP3
+                      </a>
+                    </Button>
+                  </div>
+                )}
+                {voiceError && <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">{voiceError}</div>}
               </div>
             </div>
           )}
@@ -3049,7 +3237,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
         then Whiteboard. Nano-banana will render the hand-drawn whiteboard
         deck exactly as you saw before. Once the deck is finished in Manus,
         come back and upload the PDF in the Final Client Deliverable card
-        below to generate the ElevenLabs DJ #2 narration script.
+        below to generate the ElevenLabs DJ-3 narration script.
       </p>
 
       <div className="mt-5 grid gap-4">
@@ -3076,7 +3264,7 @@ function ClientFacingDeckCard({ auditId }: { auditId: string }) {
           </li>
           <li>
             <span className="font-medium">4.</span> Upload the PDF in the
-            Final Client Deliverable card below. The ElevenLabs DJ #2 script
+            Final Client Deliverable card below. The ElevenLabs DJ-3 script
             will be ready to generate from it. Keep the ZIP for reusing
             individual slide images later.
           </li>

@@ -1,0 +1,62 @@
+services:
+  - type: web
+    name: smb-audit-engine-staging
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: codex/audit-engine-staging
+    autoDeploy: false
+    dockerfilePath: ./Dockerfile
+
+    # Staging must use its own disk. Never attach the production /var/data disk.
+    disk:
+      name: smb-audit-staging-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: ALLOWED_EMAILS
+        value: smbsolutions00@gmail.com
+      - key: ADMIN_EMAIL
+        value: smbsolutions00@gmail.com
+
+      # Set after Render assigns the staging hostname.
+      - key: APP_URL
+        sync: false
+
+      # Secrets are entered in Render at staging creation time and never committed.
+      - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AUTH_FROM_EMAIL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_APPROVED_VOICES_JSON
+        value: '[{"id":"UFPKgXaO1YZylfGuGr3z","name":"DJ-3"}]'
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_v3
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
+
+      # Keep external enrichment disabled until its staging credentials are supplied.
+      - key: KEYSEARCH_AUTOFETCH_ENABLED
+        value: "false"
+      - key: KEYSEARCH_EMAIL
+        sync: false
+      - key: KEYSEARCH_PASSWORD
+        sync: false
+

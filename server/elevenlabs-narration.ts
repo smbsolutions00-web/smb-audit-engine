@@ -1,16 +1,16 @@
 /**
- * ElevenLabs DJ #2 narration script generator.
+ * ElevenLabs DJ-3 narration script generator.
  *
  * Strategy:
  *   1. Try text extraction with pdf-parse (fast, free).
  *   2. If the PDF is image-only (or text is too short), render every page
  *      to PNG with poppler's pdftoppm and send the page images to Claude's
  *      vision API so it can read the slides directly.
- *   3. Fill the DJ #2 faith-based template with slide-by-slide narration
+ *   3. Fill the DJ-3 faith-based template with slide-by-slide narration
  *      (block-by-block, voice-direction tags, SSML <break/>) and return
  *      the script as plain text ready to paste into ElevenLabs.
  *
- * The template lives at templates/elevenlabs-dj2-narration-template.txt.
+ * The template retains its legacy filename at templates/elevenlabs-dj2-narration-template.txt.
  * The Intro section and the warm closing are reproduced verbatim with
  * only [OWNER NAME/S], [BUSINESS NAME], [CITY], and [SERVING YOUR
  * CUSTOMERS] substituted. There is no opening prayer or closing prayer
@@ -239,7 +239,7 @@ function buildKeywordTiersBlock(report: any): string {
 }
 
 /**
- * Generate the ElevenLabs DJ #2 narration script for an uploaded Manus PDF.
+ * Generate the ElevenLabs DJ-3 narration script for an uploaded Manus PDF.
  * Returns the plain-text script ready to paste into ElevenLabs.
  */
 export async function generateElevenLabsScript(
@@ -280,9 +280,9 @@ export async function generateElevenLabsScript(
 
   const system = [
     "You are writing a finished ElevenLabs narration script. Your output goes straight into ElevenLabs - no preamble, no commentary, no markdown fences.",
-    "You are voicing 'DJ #2', the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Voice: warm, conversational, confident, plain-English with light faith-based touches.",
+    "You are voicing 'DJ-3', the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Voice: warm, conversational, confident, plain-English with light faith-based touches.",
     "ABSOLUTE RULES:",
-    "1. Follow the supplied DJ #2 template structure exactly. Keep all section headers (### Slide N, ***).",
+    "1. Follow the supplied DJ-3 template structure exactly. Keep all section headers (### Slide N, ***).",
     "2. The Intro section and the warm closing must be reproduced VERBATIM from the template, with only [OWNER NAME/S], [BUSINESS NAME], [CITY], and [SERVING YOUR CUSTOMERS] substituted. [OWNER NAME/S] should be replaced with the value of OWNER FIRST NAME (provided in the context block) wherever it appears in the Intro. [BUSINESS NAME] should be replaced with the value of BUSINESS NAME. [SERVING YOUR CUSTOMERS] should be replaced with the industry-appropriate phrase based on INDUSTRY context: for healthcare/medical/dental/medspa/wellness/therapy/counseling use 'caring for your patients'; for law/accounting/consulting/coaching use 'serving your clients'; for restaurant/retail/hospitality/salon/beauty use 'taking care of your guests'; for trades/contractors/home services use 'serving your customers'; if INDUSTRY is unknown or missing, default to 'serving the people you serve'. Do NOT add any prayer (opening or closing). The template intentionally has no prayers.",
     "3. For each slide, replace the bracketed instruction lines with actual narration. Keep voice-direction tags like [warmly, conversational] on their own line above the spoken text. Make the slide narration feel like a personal one-on-one conversation, not a generic voiceover. Reference the owner and business naturally so the listener knows the script was written for them specifically. Across the full script (not in every single sentence) you should weave in:\n   - OWNER FIRST NAME, used as a direct address (for example: 'Tawana, here's what stands out...').\n   - BUSINESS NAME, used when referring to the business itself ('what we're seeing for Belle Wellness is...').\n   - TEAM PHRASE ('the {BUSINESS NAME} team'), used when talking about the staff/people/employees ('this gives the Belle Wellness team back hours every week').\n   Aim for roughly one direct address per slide and one or two business/team references per slide. Vary the placement (opening, middle, closing). Do NOT cram all three into every sentence, and do NOT robotically repeat 'Tawana, the Belle Wellness team, you all' as a stock phrase. Keep it natural and conversational.",
     "4. Use SSML <break time=\"0.5s\" /> or <break time=\"1.0s\" /> sparingly to pace key transitions. Never invent other SSML tags.",
@@ -312,7 +312,7 @@ export async function generateElevenLabsScript(
     "",
     verifiedFactsBlock,
     keywordTiersBlock,
-    "=== DJ #2 TEMPLATE (follow this structure exactly) ===",
+    "=== DJ-3 TEMPLATE (follow this structure exactly) ===",
     template,
     "",
   ]

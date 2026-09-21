@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { seedAdminIfNeeded } from "./users";
+import { assertAuthConfiguration } from "./auth";
 import { createServer } from "node:http";
 
 const app = express();
@@ -68,6 +69,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  assertAuthConfiguration();
   await seedAdminIfNeeded();
   await registerRoutes(httpServer, app);
 

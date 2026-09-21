@@ -35,11 +35,15 @@ services:
         value: "true"
       - key: ALLOWED_EMAILS
         value: smbsolutions00@gmail.com
+      - key: ADMIN_EMAIL
+        value: smbsolutions00@gmail.com
       - key: APP_URL
         value: https://audit.smbsolution.ai
 
       # Secrets — set in Render dashboard, NOT committed.
       - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_INITIAL_PASSWORD
         sync: false
       - key: RESEND_API_KEY
         sync: false
@@ -47,6 +51,14 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_APPROVED_VOICES_JSON
+        sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_v3
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
 
       # Keysearch auto-fetch — server logs into keysearch.co and scrapes
       # Explorer for the requested domain. Set to "true" to enable.

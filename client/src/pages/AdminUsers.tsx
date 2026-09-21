@@ -103,8 +103,8 @@ export default function AdminUsers() {
       setCreateError("Enter a valid email address.");
       return;
     }
-    if (newPassword.length < 8) {
-      setCreateError("Password must be at least 8 characters.");
+    if (newPassword.length < 12) {
+      setCreateError("Password must be at least 12 characters.");
       return;
     }
     setCreating(true);
@@ -136,10 +136,10 @@ export default function AdminUsers() {
 
   async function handleReset() {
     if (!resetUser) return;
-    if (resetPassword.length < 8) {
+    if (resetPassword.length < 12) {
       toast({
         title: "Password too short",
-        description: "Must be at least 8 characters.",
+        description: "Must be at least 12 characters.",
         variant: "destructive",
       });
       return;
@@ -457,7 +457,7 @@ export default function AdminUsers() {
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  At least 8 characters. The user will set their own password on first sign-in.
+                  At least 12 characters. The user will set their own password on first sign-in.
                 </p>
               </div>
               <div>

@@ -60,7 +60,7 @@ WORKDIR /app
 COPY --from=builder /app/package.json /app/package.json
 COPY --from=builder /app/node_modules /app/node_modules
 COPY --from=builder /app/dist /app/dist
-# Static template files (e.g. ElevenLabs DJ #2 narration template) are read
+# Static template files (e.g. the ElevenLabs DJ-3 narration template) are read
 # at runtime by server code. They are not bundled into dist/, so copy the
 # whole templates directory verbatim.
 COPY --from=builder /app/templates /app/templates

@@ -23,14 +23,15 @@
  *        POST   /api/admin/users/:id/role
  *        DELETE /api/admin/users/:id
  *
- * Auth is bypassed entirely if AUTH_ENABLED !== "true". This keeps local
- * development frictionless while production stays locked down.
+ * Production fails closed unless AUTH_ENABLED=true and SESSION_SECRET is a
+ * strong secret. Local development may opt out explicitly with
+ * AUTH_ENABLED=false.
  */
 
 import type { Express, Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { validateAuthConfiguration } from "./auth-config";
 import {
-  countUsers,
   createUser,
   deleteUser,
   getUserByEmail,
@@ -44,17 +45,50 @@ import {
 
 const SESSION_COOKIE = "smb_session";
 const SESSION_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
-
-// TEMPORARY: auth is force-disabled in the build because Render env vars are
-// not reaching the process. Owner asked to disable auth entirely until we can
-// sort out the Render configuration in a later session. To re-enable, flip
-// AUTH_FORCE_DISABLED back to false (or remove this override).
-const AUTH_FORCE_DISABLED = true;
+export const MIN_PASSWORD_LENGTH = 12;
 
 function getEnv() {
-  const enabled = !AUTH_FORCE_DISABLED && process.env.AUTH_ENABLED === "true";
+  const enabled = process.env.AUTH_ENABLED === "true";
   const secret = process.env.SESSION_SECRET || "";
   return { enabled, secret };
+}
+
+export function assertAuthConfiguration() {
+  validateAuthConfiguration(process.env);
+}
+
+export function requireSameOrigin(req: Request, res: Response, next: NextFunction) {
+  if (process.env.NODE_ENV !== "production" || ["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    return next();
+  }
+  const origin = req.get("origin");
+  if (!origin) return next();
+  const configured = process.env.APP_URL;
+  const allowedOrigins = new Set<string>();
+  if (configured) {
+    try { allowedOrigins.add(new URL(configured).origin); } catch { /* startup docs cover invalid APP_URL */ }
+  }
+  allowedOrigins.add(`${req.protocol}://${req.get("host")}`);
+  if (!allowedOrigins.has(origin)) {
+    return res.status(403).json({ message: "Cross-site request blocked" });
+  }
+  return next();
+}
+
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+function isLoginRateLimited(key: string) {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || entry.resetAt <= now) {
+    loginAttempts.set(key, { count: 1, resetAt: now + 15 * 60_000 });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > 10;
+}
+
+function clearLoginAttempts(key: string) {
+  loginAttempts.delete(key);
 }
 
 export interface SessionPayload {
@@ -92,6 +126,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!getEnv().enabled) return next();
   requireAuth(req, res, () => {
     const u = (req as Request & { user?: SessionPayload }).user;
     if (!u || u.role !== "admin") {
@@ -177,65 +212,9 @@ export function registerAuthRoutes(app: Express) {
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
-
-    // ---------- env-var direct login (recovery path) ----------
-    // If the credentials match ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD exactly,
-    // we let the user in regardless of DB state. We then auto-heal the DB row
-    // (creating or repairing the admin user) so subsequent logins via the
-    // normal DB path also work. This is the recovery mechanism that ensures
-    // the platform owner is never locked out as long as the env vars are set.
-    const envAdminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-    const envAdminPassword = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
-    if (
-      envAdminEmail &&
-      envAdminPassword &&
-      envAdminPassword.length >= 8 &&
-      email === envAdminEmail &&
-      password === envAdminPassword
-    ) {
-      // Heal or create the DB row so the rest of the app works normally.
-      let user = getUserByEmail(envAdminEmail);
-      if (!user) {
-        try {
-          await createUser({
-            email: envAdminEmail,
-            password: envAdminPassword,
-            role: "admin",
-            mustChange: false,
-          });
-          user = getUserByEmail(envAdminEmail);
-          console.log(`[auth] Env-var login healed missing admin row for ${envAdminEmail}`);
-        } catch (err) {
-          console.error("[auth] Could not create admin row during env-var login:", err);
-        }
-      } else {
-        // Make sure role is admin and password hash matches the env var so
-        // future DB logins succeed too.
-        if (user.role !== "admin") setRole(user.id, "admin");
-        try {
-          await setPassword(user.id, envAdminPassword, true);
-          user = getUserByEmail(envAdminEmail);
-          console.log(`[auth] Env-var login re-synced admin password for ${envAdminEmail}`);
-        } catch (err) {
-          console.error("[auth] Could not re-sync admin password during env-var login:", err);
-        }
-      }
-
-      if (!user) {
-        return res.status(500).json({ message: "Env-var login succeeded but DB row could not be created" });
-      }
-
-      markLoggedIn(user.id);
-      issueSessionCookie(res, {
-        uid: user.id,
-        email: user.email,
-        role: "admin",
-        kind: "session",
-      });
-      return res.json({
-        ok: true,
-        user: { email: user.email, role: "admin", mustChange: false },
-      });
+    const rateKey = `${req.ip || "unknown"}:${email}`;
+    if (isLoginRateLimited(rateKey)) {
+      return res.status(429).json({ message: "Too many sign-in attempts. Try again in 15 minutes." });
     }
 
     // ---------- normal DB-backed login ----------
@@ -243,6 +222,7 @@ export function registerAuthRoutes(app: Express) {
     if (!user) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
+    clearLoginAttempts(rateKey);
 
     markLoggedIn(user.id);
     issueSessionCookie(res, {
@@ -262,26 +242,6 @@ export function registerAuthRoutes(app: Express) {
     });
   });
 
-  // ---------- diagnostic (no secrets leaked) ----------
-  app.get("/api/auth/debug", (_req: Request, res: Response) => {
-    const { enabled, secret } = getEnv();
-    const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-    const adminPw = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
-    const adminRow = adminEmail ? getUserByEmail(adminEmail) : null;
-    return res.json({
-      authEnabled: enabled,
-      sessionSecretSet: Boolean(secret),
-      adminEmailSet: Boolean(adminEmail),
-      adminEmailValue: adminEmail || null,
-      adminPasswordSet: Boolean(adminPw),
-      adminPasswordLength: adminPw.length,
-      adminPasswordMeetsMin: adminPw.length >= 8,
-      adminRowExists: Boolean(adminRow),
-      adminRowRole: adminRow?.role || null,
-      totalUsersInDb: countUsers(),
-    });
-  });
-
   app.post("/api/auth/logout", (_req: Request, res: Response) => {
     res.clearCookie(SESSION_COOKIE, { path: "/" });
     return res.json({ ok: true });
@@ -298,8 +258,8 @@ export function registerAuthRoutes(app: Express) {
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ message: "Both current and new password are required" });
     }
-    if (newPassword.length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ message: `New password must be at least ${MIN_PASSWORD_LENGTH} characters` });
     }
 
     const verified = await verifyPassword(u.email, currentPassword);
@@ -308,7 +268,7 @@ export function registerAuthRoutes(app: Express) {
     }
 
     try {
-      await setPassword(u.id, newPassword, true);
+      await setPassword(u.uid, newPassword, true);
       return res.json({ ok: true });
     } catch (err) {
       return res.status(400).json({ message: err instanceof Error ? err.message : "Could not change password" });
@@ -329,8 +289,8 @@ export function registerAuthRoutes(app: Express) {
     if (!email || !email.includes("@")) {
       return res.status(400).json({ message: "Valid email is required" });
     }
-    if (!password || password.length < 8) {
-      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    if (!password || password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
     }
     if (getUserByEmail(email)) {
       return res.status(409).json({ message: "A user with that email already exists" });
@@ -350,10 +310,10 @@ export function registerAuthRoutes(app: Express) {
   });
 
   app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req: Request, res: Response) => {
-    const id = req.params.id;
+    const id = String(req.params.id);
     const newPassword = String(req.body?.newPassword || "");
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ message: `New password must be at least ${MIN_PASSWORD_LENGTH} characters` });
     }
     const user = getUserById(id);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -368,7 +328,7 @@ export function registerAuthRoutes(app: Express) {
   });
 
   app.post("/api/admin/users/:id/role", requireAdmin, (req: Request, res: Response) => {
-    const id = req.params.id;
+    const id = String(req.params.id);
     const role = req.body?.role === "admin" ? "admin" : "member";
     const user = getUserById(id);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -377,7 +337,7 @@ export function registerAuthRoutes(app: Express) {
   });
 
   app.delete("/api/admin/users/:id", requireAdmin, (req: Request, res: Response) => {
-    const id = req.params.id;
+    const id = String(req.params.id);
     const me = (req as Request & { user?: SessionPayload }).user;
     if (me?.uid === id) {
       return res.status(400).json({ message: "You cannot delete your own account" });

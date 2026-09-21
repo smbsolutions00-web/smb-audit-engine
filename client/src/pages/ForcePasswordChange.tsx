@@ -23,9 +23,9 @@ export default function ForcePasswordChange({ email }: Props) {
     e.preventDefault();
     setErrorMsg("");
 
-    if (newPassword.length < 8) {
+    if (newPassword.length < 12) {
       setStatus("error");
-      setErrorMsg("New password must be at least 8 characters.");
+      setErrorMsg("New password must be at least 12 characters.");
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -96,7 +96,7 @@ export default function ForcePasswordChange({ email }: Props) {
               htmlFor="newPassword"
               className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              New password (8+ characters)
+              New password (12+ characters)
             </label>
             <div className="relative mt-1.5">
               <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

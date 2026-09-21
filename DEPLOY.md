@@ -1,83 +1,70 @@
-# Deploying SMB Audit Engine to Render
+# Render deployment runbook
 
-This guide walks through standing the engine up at `https://audit.smbsolution.ai` with magic-link login restricted to `smbsolutions00@gmail.com`.
+This repository is the recovered source for `https://audit.smbsolution.ai`. No
+deployment, DNS, Render permission, or production environment change should be
+made without explicit owner approval.
 
-## What you'll need (15 min total)
+## Pre-deploy backup
 
-1. A [Render](https://render.com) account (free signup)
-2. A [Resend](https://resend.com) account for sending magic-link emails (free tier — 100 emails/day, plenty)
-3. Access to GreenGeeks cPanel for `smbsolution.ai` to add a DNS record
-4. The repo pushed to a private GitHub repo (the agent will help)
+1. Snapshot the Render persistent disk mounted at `/var/data`.
+2. Copy `/var/data/data.db`, `data.db-wal`, `data.db-shm`, `uploads/`,
+   `manus-decks/`, and `voiceovers/` to protected storage.
+3. Record the currently deployed commit and confirm the rollback button is
+   available in Render.
 
----
+The SQLite schema is migrated in place with additive tables/columns. Do not
+replace `data.db`; existing audits and users are preserved.
 
-## 1. Generate a session secret
+## Required runtime variables
 
-Already generated for this deployment:
+Set these on the web service runtime environment, not only in a build
+environment or environment group that is not linked to the service:
 
-```
-SESSION_SECRET=VCRdRzzH7vYFPbKvIS-X9oEhKJad4Ig3h_PRSAunItba00qBv_yEzB5q_ikUxON6
-```
+- `AUTH_ENABLED=true`
+- `SESSION_SECRET`: a newly generated 32+ character secret
+- `ADMIN_EMAIL`: the owner/admin email
+- `ADMIN_INITIAL_PASSWORD`: 12+ character temporary password only when the
+  admin row does not exist or an intentional reset is being performed
+- `DATA_DIR=/var/data`
+- `APP_URL=https://audit.smbsolution.ai`
+- the existing Anthropic, DataForSEO, Keysearch, Manus, captcha, and proxy
+  credentials used by the audit workflow
+- `ELEVENLABS_API_KEY`: restricted key with Text to Speech permission only;
+  prefer a service-account key where the ElevenLabs workspace supports it
+- `ELEVENLABS_APPROVED_VOICES_JSON`: JSON allowlist such as
+  `[{"id":"UFPKgXaO1YZylfGuGr3z","name":"DJ-3"}]`
+- `ELEVENLABS_MODEL_ID=eleven_v3`
+- `ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128`
 
-Treat this like a password — anyone with it can forge login sessions. Keep it only in Render's env-var dashboard.
+Production now fails closed if auth is disabled or `SESSION_SECRET` is weak.
+The old public auth diagnostic endpoint and environment-password bypass have
+been removed.
 
-## 2. Sign up for Resend (5 min)
+## Safe rollout
 
-1. Go to <https://resend.com> → Sign up
-2. **API Keys** → **Create API Key** → name it `smb-audit-prod` → copy the `re_…` value
-3. **For initial testing**: use `onboarding@resend.dev` as the from-address — works immediately, no domain setup needed
-4. **For production**: add `smbsolution.ai` as a sending domain (Domains → Add Domain), then add the DKIM/SPF records Resend gives you to GreenGeeks DNS. Once verified you can send from `noreply@smbsolution.ai`.
+1. Build and test the exact commit locally.
+2. Deploy to a Render preview/staging service attached to a copy of the SQLite
+   data, never the production disk.
+3. Verify `/api/health`, login, forced password change, member access, admin
+   user management, an existing audit/report, script viewing/editing, and a
+   short ElevenLabs generation with an approved voice.
+4. Deploy the commit to production during a low-traffic window.
+5. Confirm Render logs show auth enabled and the existing admin row found.
+6. Sign in before changing any DNS or removing rollback capacity.
+7. After the first successful password change, remove
+   `ADMIN_INITIAL_PASSWORD`. If `ADMIN_RESET_PASSWORD` was used, remove it
+   immediately and redeploy once more.
 
-## 3. Push to a private GitHub repo
+## Rollback
 
-The agent does this for you via the GitHub connector. The repo will contain everything in this directory **except** `node_modules/`, `dist/`, `data.db*`, and `uploads/` (already in `.gitignore`).
+Rollback the application to the recorded prior commit. The new
+`voiceover_jobs` table and `voiceovers/` directory are additive and can remain.
+Restore the disk snapshot only if SQLite integrity checks fail; application
+rollback alone is preferred.
 
-## 4. Create the Render service
+## Secret rotation required
 
-1. <https://render.com> → **New** → **Web Service**
-2. **Connect GitHub** → authorize → pick the new private repo
-3. Render auto-detects `render.yaml` in the repo root and pre-fills:
-   - Runtime: Node
-   - Build: `npm ci && npm run build`
-   - Start: `node dist/index.cjs`
-   - Persistent disk `smb-audit-data` mounted at `/var/data` (1 GB)
-   - Plan: **Starter ($7/mo)** — keeps the app always-on. (Free plan sleeps after 15 min idle, which means a 30-second cold-start on the first request after a quiet period.)
-4. **Set the secret env vars** (the ones marked `sync: false` in `render.yaml`):
-   - `SESSION_SECRET` → the value from step 1
-   - `RESEND_API_KEY` → from step 2
-   - `AUTH_FROM_EMAIL` → `onboarding@resend.dev` for testing, or `SMB Audit <noreply@smbsolution.ai>` once your domain is verified in Resend
-   - `ANTHROPIC_API_KEY` → your existing Claude key
-5. Click **Create Web Service**. First build takes ~3-4 min.
-
-You'll get a URL like `https://smb-audit-engine.onrender.com` — confirm login works there before pointing DNS.
-
-## 5. Add the custom domain
-
-1. In Render: **Settings** → **Custom Domains** → **Add Custom Domain** → `audit.smbsolution.ai`
-2. Render shows you a CNAME target like `smb-audit-engine.onrender.com` (copy the exact value)
-
-## 6. Add the CNAME at GreenGeeks
-
-1. Log in to GreenGeeks cPanel → **Zone Editor** (under Domains)
-2. Click **Manage** next to `smbsolution.ai`
-3. **+ Add Record** → type **CNAME**:
-   - **Name**: `audit`
-   - **Record (target)**: the exact `*.onrender.com` value Render gave you (include the trailing dot if cPanel requires)
-   - **TTL**: `14400` (4 hours) — drop to `300` while testing
-4. Save. Propagation usually takes 5-30 min.
-
-## 7. Verify
-
-1. In Render, the custom domain row will flip from "Pending" → "Verified" once DNS resolves
-2. Render auto-provisions a Let's Encrypt SSL cert (another 1-2 min)
-3. Visit <https://audit.smbsolution.ai>, enter `smbsolutions00@gmail.com`, check inbox for the magic link, click it → you should land on the dashboard
-
-If the login email doesn't arrive: check the Resend **Logs** tab — every send is recorded there. Also check Render service logs (`render logs`) for `[auth] magic link →` lines.
-
-## Operational notes
-
-- **Persistent data** lives at `/var/data/data.db` (audits) and `/var/data/uploads/` (Manus PDFs). Render disks survive deploys, restarts, and plan upgrades.
-- **Backups**: Render doesn't auto-backup the disk. Snapshot occasionally — Settings → Disks → Snapshot.
-- **Logs**: Render dashboard → Logs (live tail) or `render logs --tail` via CLI.
-- **Add a user later**: edit `ALLOWED_EMAILS` env var (comma-separated list) → Save → Render redeploys automatically (~30 sec).
-- **Free tier alternative**: change `plan: starter` to `plan: free` in `render.yaml`. Saves $7/mo but the app sleeps after 15 min idle (first request wakes it in ~30 sec).
+An historical session secret was previously committed to this public
+repository. It has been removed from the current tree but remains compromised
+by history. Rotate `SESSION_SECRET` in Render before restoring production auth;
+this intentionally invalidates all existing session cookies.

@@ -20,8 +20,11 @@ import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import { join } from "path";
+import { mkdirSync } from "fs";
 
-const DATA_DIR = process.env.DATA_DIR || "./data";
+const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const MIN_PASSWORD_LENGTH = 12;
+mkdirSync(DATA_DIR, { recursive: true });
 const usersDb = new Database(join(DATA_DIR, "data.db"));
 usersDb.pragma("journal_mode = WAL");
 
@@ -106,8 +109,8 @@ export async function createUser(opts: {
 }): Promise<PublicUser> {
   const email = opts.email.trim().toLowerCase();
   if (!email.includes("@")) throw new Error("Invalid email");
-  if (!opts.password || opts.password.length < 8) {
-    throw new Error("Password must be at least 8 characters");
+  if (!opts.password || opts.password.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
   }
   if (getUserByEmail(email)) throw new Error("A user with that email already exists");
 
@@ -147,8 +150,8 @@ export async function verifyPassword(email: string, password: string): Promise<U
 }
 
 export async function setPassword(userId: string, newPassword: string, clearMustChange = true) {
-  if (!newPassword || newPassword.length < 8) {
-    throw new Error("Password must be at least 8 characters");
+  if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
   }
   const hash = await bcrypt.hash(newPassword, 10);
   usersDb
@@ -176,7 +179,7 @@ export function setRole(userId: string, role: "admin" | "member") {
  * Behavior (idempotent, runs on every boot):
  *   1. Resolve admin email from ADMIN_EMAIL (or first ALLOWED_EMAILS entry).
  *   2. If that email does NOT exist as a user, create it as admin with
- *      ADMIN_INITIAL_PASSWORD (or a random password printed to logs).
+ *      ADMIN_INITIAL_PASSWORD. Startup fails rather than printing a secret.
  *      must_change = true so first login forces a password change.
  *   3. If that email exists but ADMIN_RESET_PASSWORD="true" is set, reset its
  *      password to ADMIN_INITIAL_PASSWORD and set must_change=true. Use this
@@ -221,13 +224,12 @@ export async function seedAdminIfNeeded() {
   const resetRequested = (process.env.ADMIN_RESET_PASSWORD || "").trim().toLowerCase() === "true";
 
   let initialPassword = (process.env.ADMIN_INITIAL_PASSWORD || "").trim();
-  let generated = false;
-
   // ----- CASE 1: admin email does not exist yet -> create it -----
   if (!existing) {
-    if (!initialPassword || initialPassword.length < 8) {
-      initialPassword = randomUUID().replace(/-/g, "").slice(0, 16);
-      generated = true;
+    if (!initialPassword || initialPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(
+        `No admin account exists. Set ADMIN_INITIAL_PASSWORD to at least ${MIN_PASSWORD_LENGTH} characters for the first boot.`,
+      );
     }
     await createUser({
       email: adminEmail,
@@ -235,24 +237,16 @@ export async function seedAdminIfNeeded() {
       role: "admin",
       mustChange: true,
     });
-    console.log("====================================================");
-    console.log("[users] Seeded admin account:");
-    console.log(`        email:    ${adminEmail}`);
-    if (generated) {
-      console.log(`        password: ${initialPassword}    (CHANGE ON FIRST LOGIN)`);
-      console.log("        (Save this password now. It will not be shown again.)");
-    } else {
-      console.log("        password: (taken from ADMIN_INITIAL_PASSWORD env var)");
-    }
-    console.log("====================================================");
+    console.log(`[users] Seeded admin account for ${adminEmail}; temporary password was read from the environment and was not logged.`);
     return;
   }
 
   // ----- CASE 2: admin email exists and reset was requested -----
   if (resetRequested) {
-    if (!initialPassword || initialPassword.length < 8) {
-      initialPassword = randomUUID().replace(/-/g, "").slice(0, 16);
-      generated = true;
+    if (!initialPassword || initialPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(
+        `ADMIN_RESET_PASSWORD requires ADMIN_INITIAL_PASSWORD with at least ${MIN_PASSWORD_LENGTH} characters.`,
+      );
     }
     await setPassword(existing.id, initialPassword, false);
     // setPassword with clearMustChange=false sets must_change=1 (force change)
@@ -260,16 +254,7 @@ export async function seedAdminIfNeeded() {
     if (existing.role !== "admin") {
       setRole(existing.id, "admin");
     }
-    console.log("====================================================");
-    console.log("[users] ADMIN_RESET_PASSWORD=true -> reset admin password:");
-    console.log(`        email:    ${adminEmail}`);
-    if (generated) {
-      console.log(`        password: ${initialPassword}    (CHANGE ON FIRST LOGIN)`);
-    } else {
-      console.log("        password: (taken from ADMIN_INITIAL_PASSWORD env var)");
-    }
-    console.log("        UNSET ADMIN_RESET_PASSWORD after you log in.");
-    console.log("====================================================");
+    console.log(`[users] Reset the admin password for ${adminEmail} from the environment; unset ADMIN_RESET_PASSWORD after login.`);
     return;
   }
 

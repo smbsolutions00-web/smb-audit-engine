@@ -92,9 +92,9 @@ async function writeState(auditId: string, patch: Partial<ManusExportState>) {
   if (!audit) return;
   const prev = readState(audit) || ({} as ManusExportState);
   const next: ManusExportState = {
-    status: "queued",
-    startedAt: Date.now(),
     ...prev,
+    status: prev.status || "queued",
+    startedAt: prev.startedAt || Date.now(),
     ...patch,
     updatedAt: Date.now(),
   };

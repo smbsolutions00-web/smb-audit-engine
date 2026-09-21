@@ -24,7 +24,7 @@ export const audits = sqliteTable("audits", {
   errorMessage: text("error_message"),
   delivered: integer("delivered").notNull().default(0), // 0 = ready, 1 = delivered
   /**
-   * Edited ElevenLabs DJ #2 script. When present, the elevenlabs-script endpoint
+   * Edited ElevenLabs DJ-3 script. When present, the elevenlabs-script endpoint
    * returns this verbatim instead of regenerating. Cleared when the user clicks
    * Regenerate so the next request rebuilds from the report + Manus PDF.
    */
@@ -57,6 +57,9 @@ export type AuditEventType =
   | "manus_deck_failed"
   | "script_generated"
   | "script_edited"
+  | "voiceover_requested"
+  | "voiceover_generated"
+  | "voiceover_failed"
   | "delivered"
   | "marked_ready"
   | "self_healed";
@@ -101,7 +104,7 @@ export interface AiAutomationPillar extends PillarReport {
   platforms: AiPlatformPresence[];
 }
 
-export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "none";
+export type GeoLayer = "local" | "adjacent" | "metro" | "state" | "root" | "national" | "estimated" | "none";
 
 /**
  * Strategic tier for narration. Drives the Brand → Local → National story
