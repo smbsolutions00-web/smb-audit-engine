@@ -739,10 +739,39 @@ function SeoDeepSection({
       )}
 
       {/* Opportunity keywords */}
+      {seo?.keywordResearch && (
+        <div className="mt-6 rounded-xl border border-card-border bg-secondary/30 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-bold">Local keyword demand scan</h4>
+            <span className="rounded-full bg-background px-2.5 py-1 text-xs font-semibold text-muted-foreground">
+              {seo.keywordResearch.status === "live"
+                ? `${seo.keywordResearch.positiveKeywords} terms with volume`
+                : seo.keywordResearch.status === "unavailable"
+                  ? "Live data not configured"
+                  : seo.keywordResearch.status === "no-demand"
+                    ? "No measured demand above threshold"
+                    : "Research incomplete"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{seo.keywordResearch.note}</p>
+          {seo.keywordResearch.markets.length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">Markets checked:</span>{" "}
+              {seo.keywordResearch.markets.join(", ")}
+            </p>
+          )}
+          {seo.keywordResearch.measuredKeywords > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {seo.keywordResearch.measuredKeywords} exact phrases measured; only phrases with at least{" "}
+              {seo.keywordResearch.minimumVolume} monthly searches are included below.
+            </p>
+          )}
+        </div>
+      )}
       {(seo?.opportunityKeywords?.length ?? 0) > 0 && (
         <KeywordTable
           title="Opportunity keywords"
-          subtitle="High-value targets we can begin pursuing immediately"
+          subtitle="Highest-volume measured terms from the home city and surrounding market"
           rows={seo!.opportunityKeywords}
           accent
         />

@@ -129,6 +129,16 @@ export interface KeywordRow {
   tier?: KeywordTier;    // Brand / Local / National classification for narration
 }
 
+export interface KeywordResearchSummary {
+  status: "live" | "unavailable" | "no-demand" | "partial";
+  markets: string[];
+  serviceThemes: string[];
+  measuredKeywords: number;
+  positiveKeywords: number;
+  minimumVolume: number;
+  note: string;
+}
+
 export interface ListingRow {
   directory: string;
   status: "Listed" | "Missing" | "Inconsistent";
@@ -143,6 +153,7 @@ export interface SeoDeepDive {
   referringDomains?: number;
   rankingKeywords: KeywordRow[];
   opportunityKeywords: KeywordRow[];
+  keywordResearch?: KeywordResearchSummary;
   listings: ListingRow[];
   napConsistency: {
     score: number; // 0-100

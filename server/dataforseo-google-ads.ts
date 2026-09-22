@@ -41,6 +41,7 @@
 
 const API_BASE = "https://api.dataforseo.com";
 const ENDPOINT = "/v3/keywords_data/google_ads/search_volume/live";
+const KEYWORD_OVERVIEW_ENDPOINT = "/v3/dataforseo_labs/google/keyword_overview/live";
 const REQUEST_TIMEOUT_MS = 30_000;
 const LOW_VOLUME_THRESHOLD_DEFAULT = 20; // escalate if volume is null or below this
 
@@ -111,6 +112,104 @@ interface RawResult {
   search_volume?: number | null;
   cpc?: number | null;
   competition?: number | null;
+}
+
+export interface KeywordOverviewResult {
+  keyword: string;
+  searchVolume: number | null;
+  cpc: number | null;
+  competition: number | null;
+  difficulty: number | null;
+  intent: string | null;
+}
+
+/**
+ * Measure an exact keyword set in one named market with DataForSEO Labs.
+ * This endpoint is used by the audit's bounded pre-sale research because it
+ * returns search volume, CPC, competition, organic difficulty, and intent in
+ * one request. Failures are non-blocking and return null metrics.
+ */
+export async function fetchKeywordOverviewAt(
+  keywords: string[],
+  market: { city?: string; state?: string },
+): Promise<KeywordOverviewResult[]> {
+  const deduped = Array.from(
+    new Set(keywords.map((keyword) => keyword.trim().toLowerCase()).filter(Boolean)),
+  ).slice(0, 1000);
+  const empty = (keyword: string): KeywordOverviewResult => ({
+    keyword,
+    searchVolume: null,
+    cpc: null,
+    competition: null,
+    difficulty: null,
+    intent: null,
+  });
+  if (deduped.length === 0) return [];
+  if (!isGoogleAdsEnabled()) return deduped.map(empty);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${KEYWORD_OVERVIEW_ENDPOINT}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader(),
+      },
+      body: JSON.stringify([
+        {
+          keywords: deduped,
+          location_name: locationName(market.city, market.state),
+          language_code: "en",
+          include_clickstream_data: false,
+        },
+      ]),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      console.warn(`[keyword-overview] HTTP ${res.status} at ${locationName(market.city, market.state)}`);
+      return deduped.map(empty);
+    }
+    const json: any = await res.json();
+    const task = json?.tasks?.[0];
+    if (task?.status_code && task.status_code !== 20000) {
+      console.warn(`[keyword-overview] API ${task.status_code}: ${task.status_message || "unknown error"}`);
+      return deduped.map(empty);
+    }
+    const items: any[] = Array.isArray(task?.result?.[0]?.items)
+      ? task.result[0].items
+      : [];
+    const byKeyword = new Map<string, KeywordOverviewResult>();
+    for (const item of items) {
+      const keyword = String(item?.keyword || "").trim().toLowerCase();
+      if (!keyword) continue;
+      byKeyword.set(keyword, {
+        keyword,
+        searchVolume: Number.isFinite(item?.keyword_info?.search_volume)
+          ? item.keyword_info.search_volume
+          : null,
+        cpc: Number.isFinite(item?.keyword_info?.cpc) ? item.keyword_info.cpc : null,
+        competition: Number.isFinite(item?.keyword_info?.competition)
+          ? item.keyword_info.competition
+          : null,
+        difficulty: Number.isFinite(item?.keyword_properties?.keyword_difficulty)
+          ? item.keyword_properties.keyword_difficulty
+          : null,
+        intent: typeof item?.search_intent_info?.main_intent === "string"
+          ? item.search_intent_info.main_intent
+          : null,
+      });
+    }
+    console.log(
+      `[keyword-overview] ${locationName(market.city, market.state)}: sent=${deduped.length} got=${items.length}`,
+    );
+    return deduped.map((keyword) => byKeyword.get(keyword) || empty(keyword));
+  } catch (err: any) {
+    clearTimeout(timeout);
+    console.warn(`[keyword-overview] failed: ${err?.message || err}`);
+    return deduped.map(empty);
+  }
 }
 
 async function fetchVolumesAt(

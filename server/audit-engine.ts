@@ -4,7 +4,7 @@
  */
 import Papa from "papaparse";
 // pdf-parse has no proper ESM types; use dynamic import
-import type { ReportData, KeywordRow, ListingRow, Grade, KeywordTier, LiveValidation } from "@shared/schema";
+import type { ReportData, KeywordRow, KeywordResearchSummary, ListingRow, Grade, KeywordTier, LiveValidation } from "@shared/schema";
 import { validateBusinessLive, reconcile, isLiveValidationEnabled } from "./live-google-validation";
 import { generateLLMText, isLLMAvailable } from "./llm-provider";
 
@@ -156,7 +156,13 @@ export interface IntakeData {
 }
 
 import { firstNameOf } from "./lib/names";
-import { enrichKeywords, isGoogleAdsEnabled, type GeoCascade } from "./dataforseo-google-ads";
+import {
+  enrichKeywords,
+  fetchKeywordOverviewAt,
+  isGoogleAdsEnabled,
+  type GeoCascade,
+  type KeywordOverviewResult,
+} from "./dataforseo-google-ads";
 
 /**
  * Deterministic regex/heuristic fallback for the three critical auto-fill
@@ -272,7 +278,7 @@ Return only JSON.`;
 }
 
 /**
- * Use a small LLM call to derive the dominant metro anchor and 3 surrounding
+ * Use a small LLM call to derive the dominant metro anchor and up to 5 surrounding
  * cities for a given local city + state. Used for the DataForSEO geo cascade
  * (local → adjacent → metro → state → root-phrase) so local-service keywords
  * get realistic search volumes.
@@ -290,17 +296,17 @@ export async function enrichIntakeGeo(args: {
   const location = args.location?.trim();
   if (!city && !state && !location) return {};
 
-  const sys = `You are a US geography assistant. Given a small/mid-size US city, return the dominant metro anchor city and 3 nearby cities used for local SEO geo targeting. Output ONLY valid JSON. Never include commentary.`;
+  const sys = `You are a US geography assistant. Given a small or mid-size US city, return the dominant metro anchor city and nearby incorporated cities used for local SEO research. Output ONLY valid JSON. Never include commentary.`;
   const usr = `For the following local business location, return:
 - metroArea: the largest dominant metro anchor city for this area (e.g. for Frisco, TX → "Dallas"; for Plano, TX → "Dallas"; for Methuen, MA → "Boston"; for Macon, GA → "Macon" itself if it is already the local metro, otherwise the dominant anchor). Just the city name, no state.
-- surroundingCities: an array of EXACTLY 3 nearby cities that share the local market, ordered nearest first. Use cities that a local-service business would realistically serve customers from. Do NOT include the input city itself or the metroArea. Just city names, no state.
+- surroundingCities: up to 5 nearby incorporated cities whose centers are approximately within a 30-mile radius of the input city, ordered nearest first. Prefer places with distinct local search demand. Do NOT include the input city itself. Include the metro anchor only when it is also inside the approximate 30-mile radius. Just city names, no state.
 
 LOCATION:
   city: ${city || "(unknown)"}
   state: ${state || "(unknown)"}
   full location string: ${location || "(unknown)"}
 
-Return only JSON like {"metroArea":"Dallas","surroundingCities":["Plano","McKinney","Allen"]}.`;
+Return only JSON like {"metroArea":"Dallas","surroundingCities":["Plano","McKinney","Allen","Carrollton","Lewisville"]}.`;
 
   try {
     const txt = await chatJSON(sys, usr, 256);
@@ -310,8 +316,8 @@ Return only JSON like {"metroArea":"Dallas","surroundingCities":["Plano","McKinn
     const surroundingCities = Array.isArray(parsed.surroundingCities)
       ? parsed.surroundingCities
           .map((c) => (typeof c === "string" ? c.trim() : ""))
-          .filter((c) => c && c.toLowerCase() !== (city || "").toLowerCase() && c.toLowerCase() !== (metroArea || "").toLowerCase())
-          .slice(0, 3)
+          .filter((c) => c && c.toLowerCase() !== (city || "").toLowerCase())
+          .slice(0, 5)
       : undefined;
     return { metroArea, surroundingCities };
   } catch (err) {
@@ -352,213 +358,204 @@ Return only JSON.`;
 
 /* -------------------- Local-keyword opportunity (DataForSEO Google Ads) -------------------- */
 
-/**
- * Generate 8–10 candidate local-SEO opportunity keywords for the client's
- * industry + city using the LLM, then enrich each with real Google Ads search
- * volume / CPC / competition via the DataForSEO geo cascade.
- *
- * Returns a KeywordRow[] ready to plug into seoDeep.opportunityKeywords.
- * Falls back to LLM-only rows (no DataForSEO metrics) if creds are missing
- * or the API fails.
- */
+export type ResearchMarket = { city: string; state?: string; geoLayer: "local" | "adjacent" | "metro" };
+export type ResearchCandidate = KeywordRow & { market: string; serviceTheme: string };
+
+export function buildPreSaleKeywordMatrix(
+  serviceThemes: string[],
+  markets: ResearchMarket[],
+): Array<{ keyword: string; market: ResearchMarket; serviceTheme: string }> {
+  const rows: Array<{ keyword: string; market: ResearchMarket; serviceTheme: string }> = [];
+  const seen = new Set<string>();
+  for (const market of markets) {
+    for (const rawTheme of serviceThemes) {
+      const serviceTheme = rawTheme.trim().toLowerCase();
+      if (!serviceTheme) continue;
+      for (const keyword of [
+        `${serviceTheme} ${market.city}`,
+        `${serviceTheme} in ${market.city}`,
+        ...(market.geoLayer === "local" ? [`${serviceTheme} near me`] : []),
+      ]) {
+        const clean = keyword.replace(/\s+/g, " ").trim().toLowerCase();
+        const key = `${market.city.toLowerCase()}|${clean}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ keyword: clean, market, serviceTheme });
+      }
+    }
+  }
+  return rows;
+}
+
+export function selectPreSaleOpportunities(
+  rows: ResearchCandidate[],
+  limit = 15,
+  minimumVolume = 5,
+): KeywordRow[] {
+  const scored = rows
+    .filter((row) => (row.volume ?? 0) >= minimumVolume)
+    .sort((a, b) => {
+      const volume = (b.volume ?? 0) - (a.volume ?? 0);
+      if (volume !== 0) return volume;
+      const commercial = (b.cpc ?? 0) - (a.cpc ?? 0);
+      if (commercial !== 0) return commercial;
+      return (a.difficulty ?? 101) - (b.difficulty ?? 101);
+    });
+
+  // Keep the terms responsible for most of the measured opportunity. We aim
+  // to cover at least 80% of positive search volume, return at least eight rows
+  // when available, and never exceed the concise audit limit.
+  const totalVolume = scored.reduce((sum, row) => sum + (row.volume || 0), 0);
+  const coverageTarget = totalVolume * 0.8;
+  const minimumRows = Math.min(8, scored.length);
+  const chosen: ResearchCandidate[] = [];
+  let coveredVolume = 0;
+  for (const row of scored) {
+    if (chosen.length >= limit) break;
+    chosen.push(row);
+    coveredVolume += row.volume || 0;
+    if (chosen.length >= minimumRows && coveredVolume >= coverageTarget) break;
+  }
+  return chosen.map(({ market: _market, serviceTheme: _theme, ...row }) => row);
+}
+
+async function deriveServiceThemes(
+  intake: IntakeData,
+  vendasta: VendastaData,
+  keysearch: KeywordRow[],
+): Promise<string[]> {
+  const industry = (intake.industry || "local business").trim();
+  const sys = `You identify verified commercial service themes for local keyword research. Output ONLY valid JSON.`;
+  const usr = `Return JSON in this shape: {"serviceThemes":["..."]}.
+
+BUSINESS: ${intake.clientName || "(unknown)"}
+INDUSTRY: ${industry}
+INTAKE FACTS: ${JSON.stringify({
+    goals: intake.businessGoals || [],
+    painPoints: intake.painPoints || [],
+    notes: intake.rawNotes || "",
+  })}
+SNAPSHOT SUMMARY: ${vendasta.rawSummary || "(none)"}
+EXISTING KEYWORD EVIDENCE: ${JSON.stringify(keysearch.slice(0, 30).map((row) => row.keyword))}
+
+Rules:
+- Return 3 to 6 concise service or provider phrases customers would use when ready to hire or buy.
+- Include only services supported by the supplied business evidence.
+- Do not add city names, state names, "near me", the business name, or informational questions.
+- Do not invent services. If evidence is thin, use the industry category itself.
+- Lowercase, 2 to 5 words each, with no punctuation.`;
+  try {
+    const txt = await chatJSON(sys, usr, 512);
+    const parsed = extractJson<{ serviceThemes?: string[] }>(txt, {});
+    const themes = Array.from(
+      new Set(
+        (parsed.serviceThemes || [])
+          .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+          .filter(Boolean),
+      ),
+    ).slice(0, 6);
+    if (themes.length > 0) return themes;
+  } catch (err) {
+    console.warn("[keyword-research] service-theme extraction failed", err);
+  }
+  return industry ? [industry.toLowerCase()] : [];
+}
+
 async function buildLocalOpportunityKeywords(
   intake: IntakeData,
   vendasta: VendastaData,
-): Promise<KeywordRow[]> {
-  const industry = (intake.industry || "local business").trim();
-  const city = (intake.city || intake.location || "").trim();
-  const state = (intake.state || "").trim();
-
-  // 1) Ask the LLM for 8–10 candidate keywords specific to this industry and city.
-  const sys = `You generate local-SEO keyword candidates for small businesses. Output ONLY valid JSON. Never include commentary.`;
-  const usr = `Generate exactly 10 high-value local-SEO opportunity keywords for this business. Return JSON: {"keywords":["...","..."]}.
-
-INDUSTRY: ${industry}
-CITY: ${city || "(unknown)"}
-STATE: ${state || "(unknown)"}
-BUSINESS NAME: ${intake.clientName || "(unknown)"}
-
-Guidelines:
-- 8-10 keywords, all relevant to local search for this industry in this city.
-- Mix of "service" terms ("emergency hvac") and "service + city" terms ("hvac repair frisco").
-- Transactional / commercial intent preferred over informational.
-- 2-5 words each. Lowercase. No quotes, no punctuation.
-- Do NOT include the business name itself.
-- Do NOT include broad national terms like "best hvac near me" — stay specific to this city/industry.
-
-Return only JSON.`;
-  let candidates: string[] = [];
-  try {
-    const txt = await chatJSON(sys, usr, 512);
-    const parsed = extractJson<{ keywords?: string[] }>(txt, {});
-    candidates = Array.isArray(parsed.keywords)
-      ? parsed.keywords.map((k) => (typeof k === "string" ? k.trim().toLowerCase() : "")).filter(Boolean).slice(0, 10)
-      : [];
-  } catch (err) {
-    console.warn("[opportunity-keywords] LLM candidate generation failed", err);
-  }
-  if (candidates.length === 0) {
-    // Last-resort: derive a tiny seed list from industry + city.
-    if (industry && city) {
-      candidates = [
-        industry,
-        `${industry} ${city}`,
-        `best ${industry} ${city}`,
-        `${industry} near me`,
-        `affordable ${industry}`,
-      ].map((k) => k.toLowerCase());
-    } else {
-      return []; // nothing to enrich
-    }
+  keysearch: KeywordRow[],
+): Promise<{ rows: KeywordRow[]; summary: KeywordResearchSummary }> {
+  const state = intake.state?.trim() || undefined;
+  let metroArea = intake.metroArea?.trim();
+  let surroundingCities = intake.surroundingCities || [];
+  if ((!metroArea || surroundingCities.length === 0) && (intake.city || intake.location)) {
+    const geo = await enrichIntakeGeo({ city: intake.city, state, location: intake.location });
+    metroArea ||= geo.metroArea;
+    if (surroundingCities.length === 0) surroundingCities = geo.surroundingCities || [];
   }
 
-  // 2) Enrich with DataForSEO Google Ads search volume cascade.
-  if (!isGoogleAdsEnabled()) {
-    // No creds: return LLM-only rows so the report still has SOMETHING. Mark geo as "none".
-    return candidates.map((kw) => ({
-      keyword: kw,
-      volume: undefined,
-      cpc: undefined,
-      competition: undefined,
-      geoLayer: "none" as const,
-      volumeGeo: "",
-      intent: "commercial",
-    }));
-  }
-
-  // If the intake was created before geo enrichment was added (older audits),
-  // metroArea / surroundingCities will be missing. Do an on-the-fly enrichment
-  // so reruns of old audits still get a proper geo cascade.
-  let metroArea = intake.metroArea;
-  let surroundingCities = intake.surroundingCities;
-  if ((!metroArea || !surroundingCities?.length) && (intake.city || intake.state)) {
-    try {
-      const geo = await enrichIntakeGeo({
-        city: intake.city,
-        state: intake.state,
-        location: intake.location,
-      });
-      if (geo.metroArea && !metroArea) metroArea = geo.metroArea;
-      if (geo.surroundingCities && !surroundingCities?.length) {
-        surroundingCities = geo.surroundingCities;
-      }
-      console.log(
-        `[opportunity-keywords] on-the-fly geo enrichment: metro=${metroArea} surrounding=${(surroundingCities || []).join(", ")}`,
-      );
-    } catch (err) {
-      console.warn("[opportunity-keywords] on-the-fly geo enrichment failed", err);
-    }
-  }
-
-  const cascade: GeoCascade = {
-    city: intake.city || undefined,
-    state: intake.state || undefined,
-    adjacentCity: surroundingCities?.[0],
-    metroArea: metroArea || undefined,
-    surroundingCities,
+  const serviceThemes = await deriveServiceThemes(intake, vendasta, keysearch);
+  const markets: ResearchMarket[] = [];
+  const addMarket = (city: string | undefined, geoLayer: ResearchMarket["geoLayer"]) => {
+    const clean = city?.trim();
+    if (!clean || markets.some((market) => market.city.toLowerCase() === clean.toLowerCase())) return;
+    markets.push({ city: clean, state, geoLayer });
   };
-  console.log(
-    `[opportunity-keywords] candidates=${candidates.length} cascade=${JSON.stringify({
-      city: cascade.city,
-      state: cascade.state,
-      metro: cascade.metroArea,
-      surrounding: cascade.surroundingCities || [],
-    })}`,
-  );
-  try {
-    // acceptAnyNonNull: trust the first non-null result from DataForSEO at any
-    // geo layer. Without this, low-volume local terms (1-19 searches/mo) get
-    // dropped as "not usable" and the report ends up with N/A everywhere.
-    // threshold: 0 means even "sv === 0" counts so the cascade can escalate
-    // to a broader geo and find a real number.
-    const enriched = await enrichKeywords(candidates, cascade, {
-      threshold: 0,
-      acceptAnyNonNull: true,
-    });
-    const hits = enriched.filter((e) => (e.metrics.sv ?? null) !== null).length;
-    console.log(
-      `[opportunity-keywords] enrichment hits=${hits}/${enriched.length} ` +
-        `layers=${enriched.map((e) => e.metrics.geo_layer).join(",")}`,
-    );
+  addMarket(intake.city || intake.location?.split(",")[0], "local");
+  surroundingCities.slice(0, 5).forEach((city) => addMarket(city, "adjacent"));
 
-    // LLM-estimated fallback: for any keyword that DataForSEO returned null on
-    // across every geo layer, ask the LLM to estimate realistic volume / cpc /
-    // difficulty so the report never shows all N/A. Estimates are marked with
-    // geoLayer = "estimated" so the front end / narration knows the provenance.
-    const stillNull = enriched
-      .filter((e) => (e.metrics.sv ?? null) === null)
-      .map((e) => e.keyword);
-    const estimates = stillNull.length > 0
-      ? await estimateKeywordMetricsLLM(stillNull, { industry, city, state })
-      : new Map<string, { volume: number; cpc: number; difficulty: number }>();
-    if (estimates.size > 0) {
-      console.log(
-        `[opportunity-keywords] LLM-estimated fallback applied to ${estimates.size}/${stillNull.length} null keywords`,
-      );
-    }
-
-    return enriched.map((e) => {
-      const live = (e.metrics.sv ?? null) !== null;
-      if (live) {
-        return {
-          keyword: e.keyword,
-          volume: e.metrics.sv ?? undefined,
-          cpc: e.metrics.cpc ?? undefined,
-          competition: e.metrics.comp ?? undefined,
-          geoLayer: e.metrics.geo_layer,
-          volumeGeo: e.volumeGeo,
-          intent: "commercial",
-        };
-      }
-      const est = estimates.get(e.keyword.toLowerCase());
-      if (est) {
-        return {
-          keyword: e.keyword,
-          volume: est.volume,
-          cpc: est.cpc,
-          difficulty: est.difficulty,
-          competition: undefined,
-          geoLayer: "estimated" as const,
-          volumeGeo: "Estimated (local industry baseline)",
-          intent: "commercial",
-        } as KeywordRow;
-      }
-      return {
-        keyword: e.keyword,
-        volume: undefined,
-        cpc: undefined,
-        competition: undefined,
-        geoLayer: "none" as const,
-        volumeGeo: "",
-        intent: "commercial",
-      };
-    });
-  } catch (err) {
-    console.warn("[opportunity-keywords] DataForSEO enrichment failed", err);
-    // Even when the cascade throws, try to give the user LLM estimates so the
-    // table is not entirely N/A.
-    const estimates = await estimateKeywordMetricsLLM(candidates, { industry, city, state }).catch(() => new Map());
-    return candidates.map((kw) => {
-      const est = estimates.get(kw.toLowerCase());
-      if (est) {
-        return {
-          keyword: kw,
-          volume: est.volume,
-          cpc: est.cpc,
-          difficulty: est.difficulty,
-          geoLayer: "estimated" as const,
-          volumeGeo: "Estimated (local industry baseline)",
-          intent: "commercial",
-        } as KeywordRow;
-      }
-      return {
-        keyword: kw,
-        geoLayer: "none" as const,
-        volumeGeo: "",
-        intent: "commercial",
-      };
-    });
+  const summaryBase = {
+    markets: markets.map((market) => state ? `${market.city}, ${state}` : market.city),
+    serviceThemes,
+    minimumVolume: 5,
+  };
+  if (!isGoogleAdsEnabled()) {
+    return {
+      rows: [],
+      summary: {
+        ...summaryBase,
+        status: "unavailable",
+        measuredKeywords: 0,
+        positiveKeywords: 0,
+        note: "Live keyword research is not configured. No search-volume estimates were invented.",
+      },
+    };
   }
+  if (markets.length === 0 || serviceThemes.length === 0) {
+    return {
+      rows: [],
+      summary: {
+        ...summaryBase,
+        status: "partial",
+        measuredKeywords: 0,
+        positiveKeywords: 0,
+        note: "The audit did not contain enough verified service and location detail to run local keyword research.",
+      },
+    };
+  }
+
+  const matrix = buildPreSaleKeywordMatrix(serviceThemes, markets);
+  const measured: ResearchCandidate[] = [];
+  for (const market of markets) {
+    const marketRows = matrix.filter((row) => row.market.city === market.city);
+    const overview = await fetchKeywordOverviewAt(
+      marketRows.map((row) => row.keyword),
+      { city: market.city, state },
+    );
+    const byKeyword = new Map<string, KeywordOverviewResult>();
+    overview.forEach((row) => byKeyword.set(row.keyword.toLowerCase(), row));
+    for (const candidate of marketRows) {
+      const live = byKeyword.get(candidate.keyword.toLowerCase());
+      measured.push({
+        keyword: candidate.keyword,
+        market: candidate.market.city,
+        serviceTheme: candidate.serviceTheme,
+        volume: live?.searchVolume ?? undefined,
+        cpc: live?.cpc ?? undefined,
+        competition: live?.competition ?? undefined,
+        difficulty: live?.difficulty ?? undefined,
+        intent: live?.intent || "commercial",
+        geoLayer: candidate.market.geoLayer,
+        volumeGeo: state ? `${candidate.market.city}, ${state}` : candidate.market.city,
+      });
+    }
+  }
+
+  const positiveKeywords = measured.filter((row) => (row.volume ?? 0) >= 5).length;
+  const rows = selectPreSaleOpportunities(measured);
+  return {
+    rows,
+    summary: {
+      ...summaryBase,
+      status: rows.length > 0 ? "live" : "no-demand",
+      measuredKeywords: measured.length,
+      positiveKeywords,
+      note: rows.length > 0
+        ? "A bounded pre-sale scan measured verified service themes across the home city and nearby cities within an approximate 30-mile radius, including near-me searches. Only terms with at least five monthly searches are shown. Full campaign research begins after engagement."
+        : "Live research completed, but no exact service-market phrase met the five-search reporting threshold.",
+    },
+  };
 }
 
 /**
@@ -641,56 +638,6 @@ async function enrichRankingKeywordsLive(
     console.warn("[ranking-keywords] DataForSEO enrichment failed", err);
     return rows;
   }
-}
-
-/**
- * LLM-estimated keyword metrics fallback. Used only when DataForSEO returns
- * null across every geo layer for a keyword. Returns conservative, realistic
- * estimates clearly labelled as estimated in the report. Never invents a brand
- * keyword volume.
- */
-async function estimateKeywordMetricsLLM(
-  keywords: string[],
-  ctx: { industry: string; city?: string; state?: string },
-): Promise<Map<string, { volume: number; cpc: number; difficulty: number }>> {
-  const out = new Map<string, { volume: number; cpc: number; difficulty: number }>();
-  if (keywords.length === 0) return out;
-  const sys = `You estimate realistic Google search metrics for long-tail local keywords. Output ONLY valid JSON.`;
-  const usr = `Estimate monthly search volume, average CPC (USD), and keyword difficulty (0-100) for each keyword below in the context of a small local business.
-
-INDUSTRY: ${ctx.industry}
-CITY: ${ctx.city || "(unknown)"}
-STATE: ${ctx.state || "(unknown)"}
-
-KEYWORDS:
-${keywords.map((k) => `- ${k}`).join("\n")}
-
-Guidelines:
-- Volume should reflect a small city / metro audience. Long-tail local terms typically 10-90 searches/month. Be conservative.
-- CPC realistic for the industry (commercial intent usually $0.50 - $4.00).
-- Difficulty: 10-40 for long-tail local, higher only if generic.
-- Round volume to nearest 10. Round CPC to 2 decimals.
-
-Return JSON: {"estimates":[{"keyword":"...","volume":N,"cpc":N.NN,"difficulty":N}, ...]}`;
-  try {
-    const txt = await chatJSON(sys, usr, 1024);
-    const parsed = extractJson<{ estimates?: Array<{ keyword?: string; volume?: number; cpc?: number; difficulty?: number }> }>(txt, {});
-    for (const row of parsed.estimates || []) {
-      if (!row?.keyword) continue;
-      const v = Number(row.volume);
-      const c = Number(row.cpc);
-      const d = Number(row.difficulty);
-      if (!Number.isFinite(v) || !Number.isFinite(c) || !Number.isFinite(d)) continue;
-      out.set(row.keyword.trim().toLowerCase(), {
-        volume: Math.max(0, Math.round(v)),
-        cpc: Math.max(0, Math.round(c * 100) / 100),
-        difficulty: Math.min(100, Math.max(0, Math.round(d))),
-      });
-    }
-  } catch (err) {
-    console.warn("[opportunity-keywords] LLM estimation failed", err);
-  }
-  return out;
 }
 
 /* -------------------- Keyword tier classification -------------------- */
@@ -887,10 +834,10 @@ ${keysearch.length > 0 ? JSON.stringify(keysearch.slice(0, 80), null, 2) : "(No 
 REQUIREMENTS:
 - SEO + Listings is the DEEPEST pillar; give it the most detail.
 - For seoDeep.domainAuthority: use the snapshot value if present, otherwise estimate from the website's age, backlink profile, and industry. Always return a number.
-- DATA PRECEDENCE for keywords (STRICT): treat live keyword API data (DataForSEO Keywords Data) as the source of truth, treat the keyword research CSV as the research feed, and treat the snapshot PDF only as supporting context, never as the primary numeric source. The server will hard-override opportunityKeywords and may hard-override rankingKeywords with live DataForSEO volume / CPC / competition / geo data after your output is parsed. Your job for keyword fields is to propose candidate keywords with sensible intent labels; do not invent precise volume / CPC numbers when the live API will provide them.
-- For seoDeep.rankingKeywords: include up to 15 candidate rows the business plausibly ranks for. Prioritize keyword research data; use the snapshot only as a hint. Sort by position ascending.
+- DATA PRECEDENCE for keywords (STRICT): treat live keyword API data as the source of truth, treat the keyword research CSV as the research feed, and treat the snapshot PDF only as supporting context, never as the primary numeric source. The server will hard-override opportunityKeywords with measured local research after your output is parsed. Do not invent volume, CPC, competition, or difficulty values.
+- For seoDeep.rankingKeywords: include up to 15 rows only when the keyword and position or volume are explicitly present in the keyword research data or snapshot. Do not infer rankings or numeric metrics. Sort verified positions ascending.
 - BRAND NAMING: NEVER use the words "Vendasta", "Manus", or any third-party platform brand name in any string field of the report. If you need to refer to the source platform, use "SMB Solutions CRM" or simply "our system". This is a strict requirement.
-- For seoDeep.opportunityKeywords: identify up to 12 high-value gap keywords (decent volume, moderate difficulty, transactional/commercial intent). Use keyword research data + your knowledge of the industry. The server will replace these with live-API-enriched rows when available.
+- For seoDeep.opportunityKeywords: return an empty array. The server supplies only live-measured local opportunities with at least five monthly searches.
 - Listings: cover Google, Bing, Facebook, Yelp, Apple Maps, Instagram, BBB, and 5+ industry-specific directories.
 - AI Automation platforms array MUST include all SIX platforms in the order shown above (ChatGPT, Google Gemini, Perplexity, Grok, Microsoft Copilot, Claude). For each, judge whether the business is likely to be surfaced/cited when someone asks that AI for a recommendation in this category and market. Notes should be plain-English and specific (e.g., "Not cited when prompting ChatGPT for HVAC contractors near Macon, GA. The site has no schema.org markup and no AI-readable FAQ content.").
 - Recommendations and Immediate Action Plan tasks must be concrete and specific (e.g., "Claim and optimize Google Business Profile with 10 photos and service categories" not "improve Google listing").
@@ -902,7 +849,7 @@ Return ONLY the JSON object.`;
 
   // Kick off the DataForSEO-backed local opportunity keywords in parallel with the
   // main report generation. Whichever finishes first waits for the other.
-  const opportunityKeywordsPromise = buildLocalOpportunityKeywords(intake, vendasta);
+  const opportunityKeywordsPromise = buildLocalOpportunityKeywords(intake, vendasta, keysearch);
 
   // Kick off the live-Google validation pass in parallel. This is what saves us
   // from claiming "no GBP" or "no reviews" when Google clearly shows otherwise.
@@ -957,18 +904,25 @@ Return ONLY the JSON object.`;
   if (!parsed.overallGrade) parsed.overallGrade = "C" as Grade;
   if (typeof parsed.overallScore !== "number") parsed.overallScore = 70;
 
-  // Hard-override opportunityKeywords with the DataForSEO-enriched local list,
-  // so the report shows real Google Ads volume / CPC / competition + geo layer
-  // instead of the model's guesses. If the enrichment returned nothing usable,
-  // we leave the model's guesses in place.
+  // Always hard-override opportunity keywords. Empty live research stays empty;
+  // the report never substitutes AI-invented search volume.
   try {
-    const localKws = await opportunityKeywordsPromise;
-    if (localKws.length > 0) {
-      parsed.seoDeep = parsed.seoDeep || ({} as ReportData["seoDeep"]);
-      parsed.seoDeep.opportunityKeywords = localKws;
-    }
+    const keywordResearch = await opportunityKeywordsPromise;
+    parsed.seoDeep = parsed.seoDeep || ({} as ReportData["seoDeep"]);
+    parsed.seoDeep.opportunityKeywords = keywordResearch.rows;
+    parsed.seoDeep.keywordResearch = keywordResearch.summary;
   } catch (err) {
     console.warn("[generateReport] opportunity-keywords promise rejected", err);
+    parsed.seoDeep.opportunityKeywords = [];
+    parsed.seoDeep.keywordResearch = {
+      status: "partial",
+      markets: [],
+      serviceThemes: [],
+      measuredKeywords: 0,
+      positiveKeywords: 0,
+      minimumVolume: 5,
+      note: "Live keyword research did not complete. No estimated volume was substituted.",
+    };
   }
 
   // Enrich rankingKeywords with live DataForSEO Keywords Data so volume / CPC /
