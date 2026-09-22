@@ -63,16 +63,28 @@ export default function NewAudit() {
           });
           return;
         }
+        // Detection and insertion are different outcomes: a field may be
+        // detected in the PDF but intentionally left unchanged because the
+        // user already entered a value.
+        const detected = Boolean(
+          data.ownerFirstName || data.clientName || data.website,
+        );
+
         // Only fill fields the user hasn't already typed into.
         let filled = 0;
         if (data.ownerFirstName && !ownerFirstName.trim()) { setOwnerFirstName(data.ownerFirstName); filled++; }
         if (data.clientName && !clientName.trim()) { setClientName(data.clientName); filled++; }
         if (data.website && !website.trim()) { setWebsite(data.website); filled++; }
-        if (filled === 0) {
+        if (!detected) {
           toast({
             variant: "destructive",
             title: "No fields detected",
             description: "The intake PDF was readable but no owner, business, or website was found. Fill the fields manually.",
+          });
+        } else if (filled === 0) {
+          toast({
+            title: "Business information already populated",
+            description: "The intake PDF was read successfully. Your existing entries were kept unchanged.",
           });
         } else {
           toast({
@@ -320,4 +332,3 @@ function FileDrop({
     </div>
   );
 }
-
