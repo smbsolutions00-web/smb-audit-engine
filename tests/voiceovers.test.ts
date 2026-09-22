@@ -30,7 +30,7 @@ test("speech chunks remain within the API safety limit", () => {
 });
 
 test("copy-ready script blocks remain separate for CapCut downloads", () => {
-  const script = `========== BLOCK 1 of 2 (100 chars) - Intro ==========\n\n### Intro\nDJ Number Two reporting.\n\n========== BLOCK 2 of 2 (100 chars) - Close ==========\n\n### Close\nThank you.`;
+  const script = `========== BLOCK 1 of 2 (100 chars) - Intro ==========\n\n### Intro\nDJ Number Three reporting.\n\n========== BLOCK 2 of 2 (100 chars) - Close ==========\n\n### Close\nThank you.`;
   const blocks = voiceovers.extractSpeechBlocks(script, 500);
-  assert.deepEqual(blocks, ["DJ Number Three reporting.", "Thank you."]);
+  assert.deepEqual(blocks, ["DJ Number Two reporting.", "Thank you."]);
 });

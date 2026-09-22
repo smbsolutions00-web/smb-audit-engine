@@ -32,9 +32,9 @@ export function parseApprovedVoices(raw = process.env.ELEVENLABS_APPROVED_VOICES
 /** Remove editor-only labels while preserving Eleven v3 delivery tags. */
 export function prepareScriptForSpeech(script: string) {
   return script
-    // Correct scripts generated from the retired DJ-2 template wording. This
-    // keeps already-saved audits from producing the wrong spoken identity.
-    .replace(/DJ Number Two/gi, "DJ Number Three")
+    // DJ-3 is the ElevenLabs voice label; the spoken assistant identity remains
+    // "DJ Number Two". Normalize previously saved scripts before synthesis.
+    .replace(/DJ Number Three/gi, "DJ Number Two")
     .replace(/\r\n/g, "\n")
     .split("\n")
     .filter((line) => !/^={4,}\s*BLOCK\s+\d+\s+of\s+\d+/i.test(line.trim()))

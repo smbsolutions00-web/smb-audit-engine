@@ -17,13 +17,13 @@ Everything else can stay consistent.
 Hello, before we jump in, let me introduce myself.
 
 [conversational, confident]  
-[OWNER NAME/S], my name is DJ. You can just call me DJ Number Three. I’m the AI personal assistant working alongside Dwayne Johnson, CEO of SMB Solutions. Our team has taken a deep dive into [BUSINESS NAME], and I wanted to start by saying we really love the services you’re offering and the potential this practice has, not only in the [CITY] area, but nationwide.
+[OWNER NAME/S], my name is DJ. You can just call me DJ Number Two. I’m the AI personal assistant working alongside Dwayne and Krystal Johnson, the leadership team behind SMB Solutions. Our team has taken a deep dive into [BUSINESS NAME], and I wanted to start by saying we really love the services you’re offering and the potential this practice has, not only in the [CITY] area, but nationwide.
 
 [steady, credible]  
 I know this because I’ve been trained through hundreds of hours of listening, learning, and reviewing market data, and through more than 100,000 business and marketing conversations across every level of the market, from Fortune 50 CEOs all the way down to hardworking mom-and-pop companies.
 
 [clear, reassuring]  
-So while Dwayne leads the vision, I’m here to help simplify this digital presence overview for you and your company in a way that’s clear, practical, and easy to follow.
+So while Dwayne and Krystal lead the vision, I’m here to help simplify this digital presence overview for you and your company in a way that’s clear, practical, and easy to follow.
 
 [encouraging]  
 And one of the biggest things I want to highlight as we go is this. AI works best when it supports your team, not replaces it. The goal is to take repetitive, time-consuming tasks off your plate so you and your staff can spend more time doing what you do best, [SERVING YOUR CUSTOMERS] and growing the business in the right direction.
@@ -50,6 +50,8 @@ As we look at slide number one…
 [name the cover: “Digital Presence Audit” for [BUSINESS NAME] in [CITY]]
 
 [one warm sentence acknowledging what they’ve built]
+
+[credit the audit as prepared by Dwayne and Krystal Johnson and SMB Solutions]
 
 ***
 
