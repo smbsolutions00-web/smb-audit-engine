@@ -7,7 +7,7 @@ import { storage } from "./storage";
 import {
   parseApprovedVoices,
   prepareScriptForSpeech,
-  splitSpeechText,
+  extractSpeechBlocks,
   type ApprovedVoice,
 } from "./voiceover-utils";
 
@@ -72,6 +72,7 @@ export interface VoiceoverJob {
   createdAt: number;
   updatedAt: number;
   downloadUrl?: string;
+  partDownloadUrls?: Array<{ number: number; downloadUrl: string }>;
 }
 
 interface VoiceoverRow {
@@ -93,6 +94,16 @@ interface VoiceoverRow {
 }
 
 function toPublicJob(row: VoiceoverRow): VoiceoverJob {
+  const auditDir = join(VOICEOVER_ROOT, row.audit_id);
+  const partDownloadUrls = row.status === "complete"
+    ? Array.from({ length: row.segment_count }, (_, index) => {
+        const number = index + 1;
+        const path = join(auditDir, `${row.id}-block-${String(number).padStart(2, "0")}.mp3`);
+        return existsSync(path)
+          ? { number, downloadUrl: `/api/audits/${row.audit_id}/voiceovers/${row.id}/blocks/${number}/download` }
+          : null;
+      }).filter((item): item is { number: number; downloadUrl: string } => Boolean(item))
+    : [];
   return {
     id: row.id,
     auditId: row.audit_id,
@@ -111,6 +122,7 @@ function toPublicJob(row: VoiceoverRow): VoiceoverJob {
     ...(row.status === "complete"
       ? { downloadUrl: `/api/audits/${row.audit_id}/voiceovers/${row.id}/download` }
       : {}),
+    ...(partDownloadUrls.length ? { partDownloadUrls } : {}),
   };
 }
 
@@ -187,16 +199,20 @@ async function runGeneration(jobId: string, auditId: string, text: string, voice
   const outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT || DEFAULT_OUTPUT_FORMAT;
   try {
     updateJob(jobId, { status: "generating", error_message: null });
-    const chunks = splitSpeechText(text);
+    // Keep the editor's <=5,000-character block boundaries intact so EJ gets
+    // separate CapCut-ready audio files in the same order as the script.
+    const chunks = extractSpeechBlocks(text);
     const audioParts: Buffer[] = [];
     const requestIds: string[] = [];
+    const auditDir = join(VOICEOVER_ROOT, auditId);
+    mkdirSync(auditDir, { recursive: true });
     for (let i = 0; i < chunks.length; i += 1) {
       const result = await requestSpeech(chunks[i], voice.id, modelId, outputFormat);
+      const blockPath = join(auditDir, `${jobId}-block-${String(i + 1).padStart(2, "0")}.mp3`);
+      await writeFile(blockPath, result.audio, { mode: 0o600 });
       audioParts.push(i === 0 ? result.audio : stripId3(result.audio));
       if (result.requestId) requestIds.push(result.requestId);
     }
-    const auditDir = join(VOICEOVER_ROOT, auditId);
-    mkdirSync(auditDir, { recursive: true });
     const finalPath = join(auditDir, `${jobId}.mp3`);
     const tempPath = `${finalPath}.tmp`;
     await writeFile(tempPath, Buffer.concat(audioParts), { mode: 0o600 });
@@ -231,9 +247,9 @@ export async function createVoiceoverJob(opts: {
   if (!capabilities.configured) throw new Error("ElevenLabs is not configured with an API key and approved voices.");
   const voice = capabilities.voices.find((candidate) => candidate.id === opts.voiceId);
   if (!voice) throw new Error("That voice is not on the approved voice list.");
-  const text = prepareScriptForSpeech(opts.script);
-  if (!text) throw new Error("The narration script is empty.");
-  if (text.length > MAX_SCRIPT_CHARS) throw new Error(`Narration is too long (max ${MAX_SCRIPT_CHARS.toLocaleString()} characters).`);
+  const speechText = prepareScriptForSpeech(opts.script);
+  if (!speechText) throw new Error("The narration script is empty.");
+  if (speechText.length > MAX_SCRIPT_CHARS) throw new Error(`Narration is too long (max ${MAX_SCRIPT_CHARS.toLocaleString()} characters).`);
   const id = randomUUID();
   const now = Date.now();
   jobsDb.prepare(`
@@ -245,14 +261,14 @@ export async function createVoiceoverJob(opts: {
   `).run(
     id, opts.auditId, opts.requestedBy, voice.id, voice.name,
     capabilities.modelId, capabilities.outputFormat,
-    createHash("sha256").update(text).digest("hex"), text.length, text.length, now, now,
+    createHash("sha256").update(speechText).digest("hex"), speechText.length, speechText.length, now, now,
   );
   await storage.appendEvent(opts.auditId, "voiceover_requested", {
     jobId: id,
     voiceName: voice.name,
-    chars: text.length,
+    chars: speechText.length,
   });
-  void runGeneration(id, opts.auditId, text, voice);
+  void runGeneration(id, opts.auditId, opts.script, voice);
   return getVoiceoverJob(opts.auditId, id)!;
 }
 
@@ -265,5 +281,18 @@ export function getVoiceoverFile(auditId: string, jobId: string) {
   return {
     stream: createReadStream(resolved),
     filename: basename(`${row.voice_name}-${auditId}.mp3`).replace(/[^a-zA-Z0-9._-]/g, "-"),
+  };
+}
+
+export function getVoiceoverBlockFile(auditId: string, jobId: string, blockNumber: number) {
+  const row = getJobRow(auditId, jobId);
+  if (!row || row.status !== "complete" || !Number.isInteger(blockNumber) || blockNumber < 1 || blockNumber > row.segment_count) return null;
+  const auditDir = join(VOICEOVER_ROOT, auditId);
+  const blockPath = resolve(join(auditDir, `${jobId}-block-${String(blockNumber).padStart(2, "0")}.mp3`));
+  const root = `${resolve(auditDir)}${process.platform === "win32" ? "\\" : "/"}`;
+  if (!blockPath.startsWith(root) || !existsSync(blockPath)) return null;
+  return {
+    stream: createReadStream(blockPath),
+    filename: basename(`${row.voice_name}-${auditId}-block-${String(blockNumber).padStart(2, "0")}.mp3`).replace(/[^a-zA-Z0-9._-]/g, "-"),
   };
 }

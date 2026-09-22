@@ -43,6 +43,7 @@ import {
   createVoiceoverJob,
   getVoiceoverCapabilities,
   getVoiceoverFile,
+  getVoiceoverBlockFile,
   getVoiceoverJob,
   listVoiceoverJobs,
 } from "./voiceovers";
@@ -171,6 +172,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!audit) return res.status(404).json({ message: "Audit not found" });
     const file = getVoiceoverFile(auditId, jobId);
     if (!file) return res.status(404).json({ message: "Voiceover audio is not ready" });
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    file.stream.pipe(res);
+  });
+
+  app.get("/api/audits/:id/voiceovers/:jobId/blocks/:blockNumber/download", async (req, res) => {
+    const auditId = String(req.params.id);
+    const jobId = String(req.params.jobId);
+    const blockNumber = Number(req.params.blockNumber);
+    const audit = await storage.getAudit(auditId);
+    if (!audit) return res.status(404).json({ message: "Audit not found" });
+    const file = getVoiceoverBlockFile(auditId, jobId, blockNumber);
+    if (!file) return res.status(404).json({ message: "Voiceover block is not ready" });
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
     res.setHeader("Cache-Control", "private, no-store");

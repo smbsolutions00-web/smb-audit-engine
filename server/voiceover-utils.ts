@@ -32,6 +32,9 @@ export function parseApprovedVoices(raw = process.env.ELEVENLABS_APPROVED_VOICES
 /** Remove editor-only labels while preserving Eleven v3 delivery tags. */
 export function prepareScriptForSpeech(script: string) {
   return script
+    // Correct scripts generated from the retired DJ-2 template wording. This
+    // keeps already-saved audits from producing the wrong spoken identity.
+    .replace(/DJ Number Two/gi, "DJ Number Three")
     .replace(/\r\n/g, "\n")
     .split("\n")
     .filter((line) => !/^={4,}\s*BLOCK\s+\d+\s+of\s+\d+/i.test(line.trim()))
@@ -39,6 +42,27 @@ export function prepareScriptForSpeech(script: string) {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Preserve the copy-ready block boundaries shown in the editor. EJ uses one
+ * MP3 per block to align narration with the presentation in CapCut. Scripts
+ * without block headers still fall back to the normal ElevenLabs-safe split.
+ */
+export function extractSpeechBlocks(script: string, maxChars = 4_500) {
+  const normalized = script.replace(/\r\n/g, "\n");
+  const marker = /^={4,}\s*BLOCK\s+\d+\s+of\s+\d+[^\n]*={4,}\s*$/gim;
+  const matches = [...normalized.matchAll(marker)];
+  if (!matches.length) return splitSpeechText(prepareScriptForSpeech(normalized), maxChars);
+
+  const blocks: string[] = [];
+  for (let index = 0; index < matches.length; index += 1) {
+    const start = (matches[index].index || 0) + matches[index][0].length;
+    const end = index + 1 < matches.length ? (matches[index + 1].index || normalized.length) : normalized.length;
+    const speech = prepareScriptForSpeech(normalized.slice(start, end));
+    blocks.push(...splitSpeechText(speech, maxChars));
+  }
+  return blocks.filter(Boolean);
 }
 
 export function splitSpeechText(text: string, maxChars = 4_500) {

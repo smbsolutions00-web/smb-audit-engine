@@ -2270,6 +2270,7 @@ interface VoiceoverJob {
   segmentCount: number;
   errorMessage: string | null;
   downloadUrl?: string;
+  partDownloadUrls?: Array<{ number: number; downloadUrl: string }>;
 }
 
 function countSpeechCharacters(script: string) {
@@ -2828,6 +2829,17 @@ function FinalDeliverableSection({
                         <FileDown className="mr-1.5 h-4 w-4" />Download MP3
                       </a>
                     </Button>
+                    {!!voiceJob.partDownloadUrls?.length && (
+                      <div className="flex flex-wrap gap-2" data-testid="voiceover-block-downloads">
+                        {voiceJob.partDownloadUrls.map((part) => (
+                          <Button key={part.number} asChild size="sm" variant="outline">
+                            <a href={`${API_BASE}${part.downloadUrl}`} download data-testid={`button-download-voiceover-block-${part.number}`}>
+                              <FileDown className="mr-1.5 h-4 w-4" />Block {part.number} MP3
+                            </a>
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 {voiceError && <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">{voiceError}</div>}
