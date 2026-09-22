@@ -2,15 +2,13 @@
  * Audit Engine — orchestrates PDF parsing, CSV parsing, AI extraction,
  * and structured report generation for the SMB Audit Engine.
  */
-import Anthropic from "@anthropic-ai/sdk";
 import Papa from "papaparse";
 // pdf-parse has no proper ESM types; use dynamic import
 import type { ReportData, KeywordRow, ListingRow, Grade, KeywordTier, LiveValidation } from "@shared/schema";
 import { validateBusinessLive, reconcile, isLiveValidationEnabled } from "./live-google-validation";
+import { generateLLMText, isLLMAvailable } from "./llm-provider";
 
-// Anthropic API expects hyphenated IDs. The underscore form is a sandbox-only alias.
-// claude-sonnet-4-6 is the latest Sonnet (Feb 2026). Override with ANTHROPIC_MODEL env var.
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+export { isLLMAvailable } from "./llm-provider";
 
 /* -------------------- PDF + CSV parsing -------------------- */
 
@@ -71,11 +69,6 @@ export function parseKeysearchCsv(csvText: string): KeywordRow[] {
 
 /* -------------------- AI helpers -------------------- */
 
-let _client: Anthropic | null = null;
-export function isLLMAvailable(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY) || _client !== null;
-}
-
 /** Convert a 0-100 score to a letter grade matching the report's scale. */
 function scoreToGrade(score: number): Grade {
   if (score >= 90) return "A" as Grade;
@@ -84,17 +77,6 @@ function scoreToGrade(score: number): Grade {
   if (score >= 60) return "D" as Grade;
   return "F" as Grade;
 }
-function getClient(): Anthropic {
-  if (_client) return _client;
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "LLM_UNAVAILABLE: Anthropic API key not configured. Audit auto-generation requires the development environment. Use the Edit Business Info button to enter NAP manually, or run new audits in the dev preview."
-    );
-  }
-  _client = new Anthropic();
-  return _client;
-}
-
 function extractJson<T>(text: string, fallback: T): T {
   // Find the first {...} or [...] block
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -143,15 +125,11 @@ function extractJson<T>(text: string, fallback: T): T {
 }
 
 async function chatJSON(systemPrompt: string, userPrompt: string, maxTokens = 4096): Promise<string> {
-  const client = getClient();
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+  return generateLLMText({
+    instructions: systemPrompt,
+    content: [{ type: "text", text: userPrompt }],
+    maxOutputTokens: maxTokens,
   });
-  const block = message.content.find((b) => b.type === "text");
-  return block && "text" in block ? block.text : "";
 }
 
 /* -------------------- Extraction prompts -------------------- */
@@ -1207,4 +1185,3 @@ function stripDashes<T>(value: T): T {
   }
   return value;
 }
-

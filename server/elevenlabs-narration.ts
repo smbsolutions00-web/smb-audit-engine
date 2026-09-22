@@ -17,7 +17,6 @@
  * in this template.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import {
   readFileSync,
   existsSync,
@@ -30,8 +29,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parsePdfBuffer } from "./audit-engine";
-
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+import { generateLLMText, type LLMInputPart } from "./llm-provider";
 
 /* Resolve template path. We try a few locations because in the bundled
    production build (esbuild -> dist/index.cjs) __dirname points at /app/dist
@@ -84,16 +82,6 @@ function cleanPdfText(raw: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (_client) return _client;
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY not set; cannot generate narration script.");
-  }
-  _client = new Anthropic();
-  return _client;
 }
 
 export interface NarrationContext {
@@ -319,7 +307,7 @@ export async function generateElevenLabsScript(
     .filter(Boolean)
     .join("\n");
 
-  const userContent: any[] = [{ type: "text", text: headerText }];
+  const userContent: LLMInputPart[] = [{ type: "text", text: headerText }];
 
   if (hasUsableText) {
     userContent.push({
@@ -337,11 +325,8 @@ export async function generateElevenLabsScript(
       userContent.push({ type: "text", text: `--- Slide ${i + 1} ---` });
       userContent.push({
         type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: pageImages[i],
-        },
+        mediaType: "image/png",
+        data: pageImages[i],
       });
     }
   }
@@ -351,21 +336,14 @@ export async function generateElevenLabsScript(
     text: "Now produce the finished ElevenLabs script. Output ONLY the script text - no preface, no explanation, no markdown code fence.",
   });
 
-  const client = getClient();
-  const resp = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    system,
-    messages: [{ role: "user", content: userContent }],
+  const out = await generateLLMText({
+    instructions: system,
+    content: userContent,
+    maxOutputTokens: 8000,
   });
 
-  const out = resp.content
-    .map((c) => (c.type === "text" ? c.text : ""))
-    .join("")
-    .trim();
-
   if (!out) {
-    throw new Error("Claude returned an empty narration script.");
+    throw new Error("The configured LLM returned an empty narration script.");
   }
 
   return out
